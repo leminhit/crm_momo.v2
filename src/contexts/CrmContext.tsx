@@ -112,10 +112,17 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
       toast.success('Đăng nhập thành công');
     } catch (error) {
       const code = (error as { code?: string })?.code ?? '';
-      if (code === 'auth/popup-closed-by-user') {
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
         toast.info('Bạn đã đóng cửa sổ đăng nhập');
       } else if (code === 'auth/popup-blocked') {
         toast.error('Trình duyệt đang chặn popup. Vui lòng cho phép popup để đăng nhập Google.');
+      } else if (code === 'auth/unauthorized-domain') {
+        const host = typeof window !== 'undefined' ? window.location.hostname : 'domain hiện tại';
+        toast.error(
+          `Tên miền "${host}" chưa được cấp phép trong Firebase Authentication (Authorized domains).`
+        );
+      } else if (code === 'auth/operation-not-allowed') {
+        toast.error('Đăng nhập Google chưa được bật trong Firebase Authentication.');
       } else {
         toast.error('Không thể đăng nhập Google. Vui lòng thử lại.');
         console.error('Google Sign-In error:', error);
