@@ -1,0 +1,6 @@
+{
+  "name": "Sổ Khách CRM",
+  "description": "Hệ thống quản lý khách hàng cá nhân (Personal CRM) lưu trữ Cloud Firestore, hỗ trợ nhiều số điện thoại, link Google Maps, mở nhanh Zalo, xuất Excel và sao lưu khôi phục.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

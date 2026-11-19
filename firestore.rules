@@ -1,0 +1,286 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwnerUid(uid) {
+      return isVerifiedUser() && request.auth.uid == uid;
+    }
+
+    function isWorkspaceMember(workspaceId) {
+      return isVerifiedUser() &&
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid));
+    }
+
+    function getMemberRole(workspaceId) {
+      return get(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)).data.role;
+    }
+
+    function isWorkspaceOwnerOrAdmin(workspaceId) {
+      return isWorkspaceMember(workspaceId) && (getMemberRole(workspaceId) == 'owner' || getMemberRole(workspaceId) == 'admin');
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUser(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'defaultWorkspaceId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'defaultWorkspaceId', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == userId && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && data.defaultWorkspaceId is string && isValidId(data.defaultWorkspaceId)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspace(data, workspaceId) {
+      return data.keys().hasAll(['id', 'name', 'ownerId', 'mode', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'ownerId', 'mode', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == workspaceId && isValidId(data.id)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.mode in ['personal', 'team']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceMember(data, workspaceId, memberId) {
+      return data.keys().hasAll(['uid', 'workspaceId', 'role', 'displayName', 'email', 'joinedAt'])
+        && data.keys().hasOnly(['uid', 'workspaceId', 'role', 'displayName', 'email', 'joinedAt'])
+        && data.uid is string && data.uid == memberId && isValidId(data.uid)
+        && data.workspaceId is string && data.workspaceId == workspaceId && isValidId(data.workspaceId)
+        && data.role in ['owner', 'admin', 'member']
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.joinedAt is timestamp;
+    }
+
+    function isValidPhoneEntry(p) {
+      return p is map
+        && p.keys().hasAll(['number', 'label', 'isPrimary', 'hasZalo'])
+        && p.keys().hasOnly(['number', 'label', 'isPrimary', 'hasZalo'])
+        && p.number is string && p.number.size() >= 3 && p.number.size() <= 30
+        && p.label is string && p.label.size() <= 40
+        && p.isPrimary is bool
+        && p.hasZalo is bool;
+    }
+
+    function isValidCustomer(data, workspaceId, customerId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'ownerId', 'assignedTo', 'fullName', 'company',
+          'position', 'phones', 'email', 'address', 'googleMapsUrl', 'status',
+          'priority', 'source', 'tags', 'quickNote', 'nextFollowUpAt',
+          'estimatedValue', 'isStarred', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'ownerId', 'assignedTo', 'fullName', 'company',
+          'position', 'phones', 'email', 'address', 'googleMapsUrl', 'status',
+          'priority', 'source', 'tags', 'quickNote', 'nextFollowUpAt',
+          'estimatedValue', 'isStarred', 'createdAt', 'updatedAt'
+        ])
+        && data.id is string && data.id == customerId && isValidId(data.id)
+        && data.workspaceId is string && data.workspaceId == workspaceId && isValidId(data.workspaceId)
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.assignedTo is string && isValidId(data.assignedTo)
+        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120
+        && data.company is string && data.company.size() <= 120
+        && data.position is string && data.position.size() <= 100
+        && data.phones is list && data.phones.size() >= 1 && data.phones.size() <= 10 && isValidPhoneEntry(data.phones[0])
+        && data.email is string && data.email.size() <= 160
+        && data.address is string && data.address.size() <= 300
+        && data.googleMapsUrl is string && data.googleMapsUrl.size() <= 500
+        && data.status in ['lead', 'contacted', 'negotiating', 'won', 'care', 'lost']
+        && data.priority in ['low', 'medium', 'high']
+        && data.source is string && data.source.size() <= 80
+        && data.tags is list && data.tags.size() <= 10 && (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() <= 40))
+        && data.quickNote is string && data.quickNote.size() <= 2000
+        && data.nextFollowUpAt is string && data.nextFollowUpAt.size() <= 32
+        && (data.estimatedValue is int || data.estimatedValue is float) && data.estimatedValue >= 0
+        && data.isStarred is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCustomerNote(data, workspaceId, customerId, noteId) {
+      return data.keys().hasAll(['id', 'workspaceId', 'customerId', 'authorId', 'authorName', 'type', 'content', 'createdAt'])
+        && data.keys().hasOnly(['id', 'workspaceId', 'customerId', 'authorId', 'authorName', 'type', 'content', 'createdAt'])
+        && data.id is string && data.id == noteId && isValidId(data.id)
+        && data.workspaceId is string && data.workspaceId == workspaceId && isValidId(data.workspaceId)
+        && data.customerId is string && data.customerId == customerId && isValidId(data.customerId)
+        && data.authorId is string && isValidId(data.authorId)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120
+        && data.type in ['note', 'call', 'zalo', 'meeting', 'visit']
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 3000
+        && data.createdAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Users (Strict PII Isolation)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwnerUid(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwnerUid(userId)
+        && isValidUser(incoming(), userId)
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwnerUid(userId)
+        && isValidUser(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'defaultWorkspaceId', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // 2. Workspaces (Personal & Future Team CRM)
+    match /workspaces/{workspaceId} {
+      allow get: if isValidId(workspaceId)
+        && isVerifiedUser()
+        && ((resource == null && workspaceId == ('personal_' + request.auth.uid))
+          || (resource != null && (existing().ownerId == request.auth.uid || isWorkspaceMember(workspaceId))));
+      allow list: if isVerifiedUser() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(workspaceId)
+        && isVerifiedUser()
+        && isValidWorkspace(incoming(), workspaceId)
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(workspaceId)
+        && isWorkspaceOwnerOrAdmin(workspaceId)
+        && isValidWorkspace(incoming(), workspaceId)
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'mode', 'updatedAt']);
+      allow delete: if isValidId(workspaceId) && isOwnerUid(existing().ownerId);
+
+      // 2a. Workspace Members (RBAC Master Gate)
+      match /members/{memberId} {
+        allow get: if isValidId(workspaceId) && isValidId(memberId) && (isOwnerUid(memberId) || isWorkspaceMember(workspaceId));
+        allow list: if isVerifiedUser() && existing().uid == request.auth.uid;
+        allow create: if isValidId(workspaceId)
+          && isValidId(memberId)
+          && isVerifiedUser()
+          && isValidWorkspaceMember(incoming(), workspaceId, memberId)
+          && incoming().joinedAt == request.time
+          && (
+            (memberId == request.auth.uid && incoming().role == 'owner' && existsAfter(/databases/$(database)/documents/workspaces/$(workspaceId)) && getAfter(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid)
+            || (isWorkspaceOwnerOrAdmin(workspaceId) && exists(/databases/$(database)/documents/workspaces/$(workspaceId)))
+          );
+        allow update: if isValidId(workspaceId)
+          && isValidId(memberId)
+          && isWorkspaceOwnerOrAdmin(workspaceId)
+          && isValidWorkspaceMember(incoming(), workspaceId, memberId)
+          && incoming().uid == existing().uid
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().joinedAt == existing().joinedAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'displayName']);
+        allow delete: if isValidId(workspaceId)
+          && isValidId(memberId)
+          && isWorkspaceOwnerOrAdmin(workspaceId)
+          && memberId != request.auth.uid;
+      }
+
+      // 2b. Customers (Master Gate + Owner/Assignee List Enforcement)
+      match /customers/{customerId} {
+        allow get: if isValidId(workspaceId)
+          && isValidId(customerId)
+          && isWorkspaceMember(workspaceId)
+          && (resource == null || existing().ownerId == request.auth.uid || existing().assignedTo == request.auth.uid || isWorkspaceOwnerOrAdmin(workspaceId));
+        allow list: if isVerifiedUser()
+          && (existing().ownerId == request.auth.uid || existing().assignedTo == request.auth.uid);
+        allow create: if isValidId(workspaceId)
+          && isValidId(customerId)
+          && isVerifiedUser()
+          && isValidCustomer(incoming(), workspaceId, customerId)
+          && isWorkspaceMember(workspaceId)
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(workspaceId)
+          && isValidId(customerId)
+          && isVerifiedUser()
+          && isValidCustomer(incoming(), workspaceId, customerId)
+          && isWorkspaceMember(workspaceId)
+          && (existing().ownerId == request.auth.uid || existing().assignedTo == request.auth.uid || isWorkspaceOwnerOrAdmin(workspaceId))
+          && incoming().id == existing().id
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Full Profile Edit
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'fullName', 'company', 'position', 'phones', 'email', 'address',
+              'googleMapsUrl', 'status', 'priority', 'source', 'tags', 'quickNote',
+              'nextFollowUpAt', 'estimatedValue', 'isStarred', 'assignedTo', 'updatedAt'
+            ]) ||
+            // Action: Quick Status Change
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+            // Action: Toggle Starred
+            incoming().diff(existing()).affectedKeys().hasOnly(['isStarred', 'updatedAt']) ||
+            // Action: Quick Note & Follow-Up Update
+            incoming().diff(existing()).affectedKeys().hasOnly(['quickNote', 'nextFollowUpAt', 'updatedAt'])
+          );
+        allow delete: if isValidId(workspaceId)
+          && isValidId(customerId)
+          && isWorkspaceMember(workspaceId)
+          && (existing().ownerId == request.auth.uid || isWorkspaceOwnerOrAdmin(workspaceId));
+
+        // 2c. Customer Interaction Notes Subcollection
+        match /notes/{noteId} {
+          allow get: if isValidId(workspaceId)
+            && isValidId(customerId)
+            && isValidId(noteId)
+            && isWorkspaceMember(workspaceId)
+            && (resource == null || existing().authorId == request.auth.uid || isWorkspaceOwnerOrAdmin(workspaceId));
+          allow list: if isVerifiedUser() && existing().authorId == request.auth.uid;
+          allow create: if isValidId(workspaceId)
+            && isValidId(customerId)
+            && isValidId(noteId)
+            && isVerifiedUser()
+            && isValidCustomerNote(incoming(), workspaceId, customerId, noteId)
+            && isWorkspaceMember(workspaceId)
+            && exists(/databases/$(database)/documents/workspaces/$(workspaceId)/customers/$(customerId))
+            && incoming().authorId == request.auth.uid
+            && incoming().createdAt == request.time;
+          allow update: if false;
+          allow delete: if isValidId(workspaceId)
+            && isValidId(customerId)
+            && isValidId(noteId)
+            && isWorkspaceMember(workspaceId)
+            && (existing().authorId == request.auth.uid || isWorkspaceOwnerOrAdmin(workspaceId));
+        }
+      }
+    }
+  }
+}

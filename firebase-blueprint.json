@@ -1,0 +1,323 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and default workspace pointer for Personal & Team CRM.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the user."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Display name of the user."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified email address."
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Profile avatar URL."
+        },
+        "defaultWorkspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Primary workspace ID for the user."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of account creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last profile update."
+        }
+      },
+      "required": ["uid", "displayName", "email", "defaultWorkspaceId", "createdAt", "updatedAt"]
+    },
+    "Workspace": {
+      "title": "Workspace",
+      "description": "CRM Workspace container enabling single-user personal mode now and Team CRM expansion later.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["personal", "team"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "name", "ownerId", "mode", "createdAt", "updatedAt"]
+    },
+    "WorkspaceMember": {
+      "title": "WorkspaceMember",
+      "description": "Membership and RBAC role assignment inside a CRM workspace.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "admin", "member"]
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "joinedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "workspaceId", "role", "displayName", "email", "joinedAt"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Customer record with multiple phone numbers, location/Google Maps link, pipeline status, and notes.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "assignedTo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "company": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "position": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "phones": {
+          "type": "array",
+          "description": "Bounded array (1 to 10 items) of phone number objects with label, isPrimary, and hasZalo."
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "googleMapsUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "status": {
+          "type": "string",
+          "enum": ["lead", "contacted", "negotiating", "won", "care", "lost"]
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "source": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "tags": {
+          "type": "array",
+          "description": "Bounded array (0 to 10 items) of tag strings."
+        },
+        "quickNote": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "nextFollowUpAt": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "estimatedValue": {
+          "type": "number"
+        },
+        "isStarred": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "ownerId",
+        "assignedTo",
+        "fullName",
+        "company",
+        "position",
+        "phones",
+        "email",
+        "address",
+        "googleMapsUrl",
+        "status",
+        "priority",
+        "source",
+        "tags",
+        "quickNote",
+        "nextFollowUpAt",
+        "estimatedValue",
+        "isStarred",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CustomerNote": {
+      "title": "CustomerNote",
+      "description": "Timestamped interaction log and note entry belonging to a customer.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "customerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "type": {
+          "type": "string",
+          "enum": ["note", "call", "zalo", "meeting", "visit"]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 3000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "workspaceId", "customerId", "authorId", "authorName", "type", "content", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Private user account profile and default workspace reference."
+    },
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/Workspace" },
+      "description": "CRM Workspace root document enabling personal and future team CRM isolation."
+    },
+    "/workspaces/{workspaceId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/WorkspaceMember" },
+      "description": "Workspace member roles for Master Gate RBAC verification."
+    },
+    "/workspaces/{workspaceId}/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Customer records scoped to a workspace with multi-phone, location, status, and notes."
+    },
+    "/workspaces/{workspaceId}/customers/{customerId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/CustomerNote" },
+      "description": "Interaction timeline notes for each customer."
+    }
+  }
+}
