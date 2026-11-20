@@ -27,6 +27,7 @@ import {
   MessageCircle,
   Phone,
   Plus,
+  RotateCcw,
   Search,
   Star,
   Trash2,
@@ -45,6 +46,7 @@ import {
   bulkDeleteCustomers,
   bulkUpdateCustomerStatus,
   toggleCustomerStar,
+  updateCustomerStatus,
 } from '../lib/crm-service';
 import { exportCustomersToExcel } from '../lib/excel';
 import {
@@ -91,12 +93,15 @@ export function CustomersPage({
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [saleTab, setSaleTab] = useState<'push' | 'won'>(
-    searchParams.get('status') === 'won' ? 'won' : 'push'
-  );
+  const [saleTab, setSaleTab] = useState<'push' | 'won' | 'lost'>(() => {
+    const param = searchParams.get('status');
+    if (param === 'won') return 'won';
+    if (param === 'lost') return 'lost';
+    return 'push';
+  });
   const [statusFilter, setStatusFilter] = useState<string>(() => {
     const param = searchParams.get('status');
-    return param && param !== 'won' ? param : 'all';
+    return param && param !== 'won' && param !== 'lost' ? param : 'all';
   });
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [starredOnly, setStarredOnly] = useState(false);
@@ -115,19 +120,27 @@ export function CustomersPage({
     if (paramStatus === 'won') {
       setSaleTab('won');
       setStatusFilter('all');
+    } else if (paramStatus === 'lost') {
+      setSaleTab('lost');
+      setStatusFilter('all');
     } else if (paramStatus) {
       setSaleTab('push');
       setStatusFilter(paramStatus);
+    } else {
+      setSaleTab('push');
+      setStatusFilter('all');
     }
   }, [searchParams]);
 
-  const handleSaleTabChange = (nextTab: 'push' | 'won') => {
+  const handleSaleTabChange = (nextTab: 'push' | 'won' | 'lost') => {
     setSaleTab(nextTab);
     setStatusFilter('all');
     setRowSelection({});
     setPagination((prev) => ({ ...prev, pageIndex: 0 }));
     if (nextTab === 'won') {
       setSearchParams({ status: 'won' }, { replace: true });
+    } else if (nextTab === 'lost') {
+      setSearchParams({ status: 'lost' }, { replace: true });
     } else {
       searchParams.delete('status');
       setSearchParams(searchParams, { replace: true });
@@ -146,11 +159,15 @@ export function CustomersPage({
   };
 
   const pushCount = useMemo(
-    () => customers.filter((c) => c.status !== 'won').length,
+    () => customers.filter((c) => c.status !== 'won' && c.status !== 'lost').length,
     [customers]
   );
   const wonCount = useMemo(
     () => customers.filter((c) => c.status === 'won').length,
+    [customers]
+  );
+  const lostCount = useMemo(
+    () => customers.filter((c) => c.status === 'lost').length,
     [customers]
   );
 
@@ -159,8 +176,10 @@ export function CustomersPage({
     return customers.filter((c) => {
       if (saleTab === 'won') {
         if (c.status !== 'won') return false;
+      } else if (saleTab === 'lost') {
+        if (c.status !== 'lost') return false;
       } else {
-        if (c.status === 'won') return false;
+        if (c.status === 'won' || c.status === 'lost') return false;
         if (statusFilter !== 'all' && c.status !== statusFilter) return false;
       }
 
@@ -191,6 +210,16 @@ export function CustomersPage({
       await toggleCustomerStar(workspace.id, customer.id, !customer.isStarred);
     } catch {
       toast.error('Không thể cập nhật đánh dấu sao.');
+    }
+  };
+
+  const handleRestoreToCare = async (customer: CustomerRecord) => {
+    if (!workspace) return;
+    try {
+      await updateCustomerStatus(workspace.id, customer.id, 'care');
+      toast.success(`Đã chuyển "${customer.fullName}" sang Chăm sóc sau`);
+    } catch {
+      toast.error('Không thể cập nhật trạng thái khách hàng.');
     }
   };
 
@@ -370,6 +399,19 @@ export function CustomersPage({
           const c = info.row.original;
           return (
             <div className="flex items-center justify-end gap-1">
+              {c.status === 'lost' && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleRestoreToCare(c)}
+                  title="Chuyển về Chăm sóc sau"
+                  className="h-8 px-2 text-xs text-primary"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>Chăm sóc lại</span>
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
@@ -385,7 +427,7 @@ export function CustomersPage({
         },
       }),
     ]),
-    [onEditCustomer, onSelectCustomer]
+    [onEditCustomer, onSelectCustomer, workspace]
   );
 
   const table = useTable({
@@ -458,28 +500,30 @@ export function CustomersPage({
     setStarredOnly(false);
   };
 
-  const tabTotal = saleTab === 'won' ? wonCount : pushCount;
+  const tabTotal =
+    saleTab === 'won' ? wonCount : saleTab === 'lost' ? lostCount : pushCount;
 
   return (
     <div className="space-y-4">
-      {/* Two-Tab Sales Segmentation: Cần push sale vs Đã bán */}
+      {/* Three-Tab Sales Segmentation: Cần push sale · Đã bán · Ngưng theo dõi */}
       <div
         role="tablist"
         aria-label="Phân loại khách hàng theo tiến trình bán hàng"
-        className="grid grid-cols-2 gap-1.5 rounded-xl border border-border bg-muted/70 p-1 sm:inline-flex sm:w-auto"
+        className="grid grid-cols-3 gap-1 rounded-xl border border-border bg-muted/70 p-1 sm:inline-flex sm:w-auto"
       >
         <button
           type="button"
           role="tab"
           aria-selected={saleTab === 'push'}
           onClick={() => handleSaleTabChange('push')}
-          className={`flex min-h-[44px] sm:min-h-[40px] items-center justify-center gap-2 rounded-lg px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+          className={`flex min-h-[44px] sm:min-h-[40px] items-center justify-center gap-1.5 sm:gap-2 rounded-lg px-2 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
             saleTab === 'push'
               ? 'bg-card text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
           }`}
         >
-          <span>Cần push sale</span>
+          <span className="sm:hidden">Push sale</span>
+          <span className="hidden sm:inline">Cần push sale</span>
           <span className="font-mono text-xs tabular-nums text-primary font-semibold">
             {pushCount}
           </span>
@@ -490,7 +534,7 @@ export function CustomersPage({
           role="tab"
           aria-selected={saleTab === 'won'}
           onClick={() => handleSaleTabChange('won')}
-          className={`flex min-h-[44px] sm:min-h-[40px] items-center justify-center gap-2 rounded-lg px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+          className={`flex min-h-[44px] sm:min-h-[40px] items-center justify-center gap-1.5 sm:gap-2 rounded-lg px-2 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
             saleTab === 'won'
               ? 'bg-card text-emerald-700 dark:text-emerald-300 shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
@@ -499,6 +543,24 @@ export function CustomersPage({
           <span>Đã bán</span>
           <span className="font-mono text-xs tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
             {wonCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={saleTab === 'lost'}
+          onClick={() => handleSaleTabChange('lost')}
+          className={`flex min-h-[44px] sm:min-h-[40px] items-center justify-center gap-1.5 sm:gap-2 rounded-lg px-2 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+            saleTab === 'lost'
+              ? 'bg-card text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <span className="sm:hidden">Ngưng</span>
+          <span className="hidden sm:inline">Ngưng theo dõi</span>
+          <span className="font-mono text-xs tabular-nums text-muted-foreground font-semibold">
+            {lostCount}
           </span>
         </button>
       </div>
@@ -514,7 +576,9 @@ export function CustomersPage({
               placeholder={
                 saleTab === 'won'
                   ? 'Tìm khách đã bán theo tên, SĐT, địa chỉ...'
-                  : 'Tìm tên, số điện thoại, công ty, địa chỉ, ghi chú...'
+                  : saleTab === 'lost'
+                    ? 'Tìm khách ngưng theo dõi theo tên, SĐT...'
+                    : 'Tìm tên, số điện thoại, công ty, địa chỉ, ghi chú...'
               }
               className="pl-9 pr-9"
             />
@@ -540,7 +604,7 @@ export function CustomersPage({
               >
                 <option value="all">Tất cả cần push</option>
                 {Object.entries(CUSTOMER_STATUS_META)
-                  .filter(([k]) => k !== 'won')
+                  .filter(([k]) => k !== 'won' && k !== 'lost')
                   .map(([k, m]) => (
                     <option key={k} value={k}>
                       {m.label}
@@ -552,7 +616,7 @@ export function CustomersPage({
             <SelectField
               value={priorityFilter}
               onChange={(e) => setPriorityFilter(e.target.value)}
-              wrapperClassName={saleTab === 'won' ? 'col-span-2 sm:w-36' : 'sm:w-36'}
+              wrapperClassName={saleTab !== 'push' ? 'col-span-2 sm:w-36' : 'sm:w-36'}
               aria-label="Lọc theo ưu tiên"
             >
               <option value="all">Mọi ưu tiên</option>
@@ -590,11 +654,20 @@ export function CustomersPage({
           <div className="flex flex-wrap items-center gap-2">
             <span className="tabular-nums">
               Hiển thị <strong className="text-foreground">{filteredCustomers.length}</strong> / {tabTotal}{' '}
-              {saleTab === 'won' ? 'khách đã bán' : 'khách cần push sale'}
+              {saleTab === 'won'
+                ? 'khách đã bán'
+                : saleTab === 'lost'
+                  ? 'khách ngưng theo dõi'
+                  : 'khách cần push sale'}
             </span>
             {saleTab === 'won' && filteredCustomers.length > 0 && (
               <span className="hidden sm:inline text-muted-foreground">
                 · Chạm Zalo hoặc Gọi để nhắn tin hỏi thăm sau bán
+              </span>
+            )}
+            {saleTab === 'lost' && filteredCustomers.length > 0 && (
+              <span className="hidden sm:inline text-muted-foreground">
+                · Có thể bấm Chăm sóc lại nếu khách có nhu cầu trở lại
               </span>
             )}
             {(searchQuery || statusFilter !== 'all' || priorityFilter !== 'all' || starredOnly) && (
@@ -856,6 +929,19 @@ export function CustomersPage({
                       Chi tiết
                     </button>
                   </div>
+
+                  {c.status === 'lost' && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleRestoreToCare(c)}
+                      className="h-10 w-full text-xs text-primary border-primary/25 hover:bg-primary/10"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      <span>Chuyển về Chăm sóc sau</span>
+                    </Button>
+                  )}
                 </article>
               );
             })}
