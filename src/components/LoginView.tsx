@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   Sun,
 } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 import { Button } from './ui/button';
 import { useTheme } from '../contexts/ThemeContext';
 import { useCrm } from '../contexts/CrmContext';
@@ -30,16 +31,20 @@ export function LoginView() {
             Sổ Khách CRM
           </span>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={toggleTheme}
-          aria-label="Chuyển giao diện sáng tối"
-        >
-          {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          <span className="hidden sm:inline">{theme === 'dark' ? 'Giao diện sáng' : 'Giao diện tối'}</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <PWAInstallButton variant="header" />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={toggleTheme}
+            aria-label="Chuyển giao diện sáng tối"
+            className="h-10 sm:h-9"
+          >
+            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            <span className="hidden sm:inline">{theme === 'dark' ? 'Giao diện sáng' : 'Giao diện tối'}</span>
+          </Button>
+        </div>
       </header>
 
       <main className="flex-1 mx-auto w-full max-w-6xl px-6 py-10 lg:py-16 flex items-center">

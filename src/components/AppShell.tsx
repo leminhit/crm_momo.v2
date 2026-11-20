@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   CalendarClock,
-  FileSpreadsheet,
   LayoutDashboard,
   Moon,
   Plus,
@@ -9,16 +8,17 @@ import {
   Sun,
   Users,
 } from 'lucide-react';
-import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { CustomerDetailDrawer } from './CustomerDetailDrawer';
 import { CustomerFormModal } from './CustomerFormModal';
+import { OfflineIndicator } from './OfflineIndicator';
+import { PWAInstallButton } from './PWAInstallButton';
 import { Button } from './ui/button';
 import { useCrm } from '../contexts/CrmContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getInitials } from '../lib/utils';
 import { CustomersPage } from '../pages/CustomersPage';
 import { DashboardPage } from '../pages/DashboardPage';
-import { DataBackupPage } from '../pages/DataBackupPage';
 import { FollowUpsPage } from '../pages/FollowUpsPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import type { CustomerRecord } from '../types/crm';
@@ -27,23 +27,14 @@ const NAV_ITEMS = [
   { to: '/', label: 'Tổng quan', icon: LayoutDashboard, end: true },
   { to: '/customers', label: 'Khách hàng', icon: Users, end: false },
   { to: '/follow-ups', label: 'Chăm sóc', icon: CalendarClock, end: false },
-  { to: '/data', label: 'Excel & Sao lưu', icon: FileSpreadsheet, end: false },
   { to: '/settings', label: 'Cài đặt', icon: Settings, end: false },
-];
-
-const MOBILE_TABS = [
-  { to: '/', label: 'Tổng quan', icon: LayoutDashboard, end: true },
-  { to: '/customers', label: 'Khách hàng', icon: Users, end: false },
-  { to: '/follow-ups', label: 'Chăm sóc', icon: CalendarClock, end: false },
-  { to: '/data', label: 'Dữ liệu', icon: FileSpreadsheet, end: false },
 ];
 
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Tổng quan CRM',
   '/customers': 'Danh sách khách hàng',
   '/follow-ups': 'Lịch hẹn & Chăm sóc',
-  '/data': 'Xuất Excel & Sao lưu',
-  '/settings': 'Cài đặt hệ thống',
+  '/settings': 'Cài đặt & Dữ liệu',
 };
 
 export function AppShell() {
@@ -158,6 +149,8 @@ export function AppShell() {
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <PWAInstallButton variant="header" />
+
             <Button
               type="button"
               variant="ghost"
@@ -176,7 +169,13 @@ export function AppShell() {
 
             <NavLink
               to="/settings"
-              className="md:hidden flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+              className={({ isActive }) =>
+                `md:hidden flex h-10 w-10 items-center justify-center rounded-lg transition-colors ${
+                  isActive
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-muted-foreground hover:bg-muted'
+                }`
+              }
               aria-label="Cài đặt"
             >
               <Settings className="h-4 w-4" />
@@ -186,11 +185,10 @@ export function AppShell() {
               type="button"
               size="sm"
               onClick={handleOpenCreate}
-              className="h-10 sm:h-9 px-3 sm:px-4"
+              className="hidden md:inline-flex h-9 px-4"
             >
               <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">Thêm khách hàng</span>
-              <span className="sm:hidden">Thêm</span>
+              <span>Thêm khách hàng</span>
             </Button>
           </div>
         </header>
@@ -221,38 +219,72 @@ export function AppShell() {
               path="/follow-ups"
               element={<FollowUpsPage onSelectCustomer={handleSelectCustomer} />}
             />
-            <Route path="/data" element={<DataBackupPage />} />
+            <Route path="/data" element={<Navigate to="/settings" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </main>
       </div>
 
-      {/* Mobile Fixed Bottom Tab Bar (<= 15% mobile viewport height) */}
+      {/* Mobile Fixed Bottom Tab Bar with Prominent Quick-Add CTA */}
       <nav
         aria-label="Điều hướng di động"
         className="md:hidden fixed bottom-0 inset-x-0 z-30 border-t border-border bg-card/95 backdrop-blur-md pb-safe"
       >
-        <div className="grid grid-cols-4 h-14">
-          {MOBILE_TABS.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <NavLink
-                key={tab.to}
-                to={tab.to}
-                end={tab.end}
-                className={({ isActive }) =>
-                  `flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors ${
-                    isActive ? 'text-primary' : 'text-muted-foreground'
-                  }`
-                }
-              >
-                <Icon className="h-5 w-5" />
-                <span>{tab.label}</span>
-              </NavLink>
-            );
-          })}
+        <div className="grid grid-cols-4 h-16 items-center px-1">
+          <NavLink
+            to="/"
+            end
+            className={({ isActive }) =>
+              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium transition-colors ${
+                isActive ? 'text-primary' : 'text-muted-foreground'
+              }`
+            }
+          >
+            <LayoutDashboard className="h-5 w-5" />
+            <span>Tổng quan</span>
+          </NavLink>
+
+          <NavLink
+            to="/customers"
+            className={({ isActive }) =>
+              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium transition-colors ${
+                isActive ? 'text-primary' : 'text-muted-foreground'
+              }`
+            }
+          >
+            <Users className="h-5 w-5" />
+            <span>Khách hàng</span>
+          </NavLink>
+
+          <div className="flex items-center justify-center px-1.5">
+            <button
+              type="button"
+              onClick={handleOpenCreate}
+              aria-label="Thêm nhanh khách hàng"
+              className="flex flex-col items-center justify-center w-full h-11 rounded-xl bg-primary text-primary-foreground shadow-sm active:scale-[0.97] transition-transform cursor-pointer"
+            >
+              <Plus className="h-5 w-5" />
+              <span className="text-[10px] font-semibold leading-none mt-0.5">
+                Thêm
+              </span>
+            </button>
+          </div>
+
+          <NavLink
+            to="/follow-ups"
+            className={({ isActive }) =>
+              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium transition-colors ${
+                isActive ? 'text-primary' : 'text-muted-foreground'
+              }`
+            }
+          >
+            <CalendarClock className="h-5 w-5" />
+            <span>Chăm sóc</span>
+          </NavLink>
         </div>
       </nav>
+
+      <OfflineIndicator />
 
       {/* Create / Edit Customer Modal */}
       <CustomerFormModal

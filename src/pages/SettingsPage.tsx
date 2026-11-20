@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Layers, LogOut, Moon, Shield, Sun, Users } from 'lucide-react';
+import { Layers, LogOut, Moon, Shield, Smartphone, Sun, Users } from 'lucide-react';
 import { toast } from 'sonner';
+import { PWAInstallButton } from '../components/PWAInstallButton';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -9,6 +10,7 @@ import { useCrm } from '../contexts/CrmContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { renameWorkspace } from '../lib/crm-service';
 import { CRM_LIMITS } from '../lib/validators';
+import { DataBackupPage } from './DataBackupPage';
 
 export function SettingsPage() {
   const { user, profile, workspace, signOut, updateLocalWorkspaceName } = useCrm();
@@ -41,7 +43,25 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6 max-w-4xl">
+      {/* PWA / Add to Home Screen (iPhone & Android) */}
+      <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <Smartphone className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-base font-semibold text-foreground">
+              Cài đặt như App trên iPhone / Android
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+              Thêm Sổ Khách CRM ra màn hình chính để mở nhanh một chạm ở chế độ toàn màn hình, không còn thanh địa chỉ trình duyệt.
+            </p>
+          </div>
+        </div>
+        <PWAInstallButton variant="card" />
+      </section>
+
       {/* Workspace Settings */}
       <section className="rounded-xl border border-border bg-card p-5 space-y-4">
         <div className="flex items-start gap-3">
@@ -149,13 +169,26 @@ export function SettingsPage() {
             type="button"
             variant="outline"
             onClick={signOut}
-            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+            className="text-destructive hover:text-destructive hover:bg-destructive/10 h-10 w-full sm:w-auto"
           >
             <LogOut className="h-4 w-4" />
             Đăng xuất tài khoản
           </Button>
         </div>
       </section>
+
+      {/* Excel Export/Import & JSON Backup (relocated from bottom tab) */}
+      <div id="backup" className="space-y-4 pt-2 border-t border-border">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">
+            Xuất Excel &amp; Sao lưu dữ liệu
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Xuất danh sách khách hàng, nhập từ file Excel có sẵn hoặc tải bản sao lưu JSON toàn bộ hệ thống.
+          </p>
+        </div>
+        <DataBackupPage />
+      </div>
     </div>
   );
 }

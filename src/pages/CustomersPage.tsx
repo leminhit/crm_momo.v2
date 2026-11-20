@@ -91,9 +91,13 @@ export function CustomersPage({
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>(
-    searchParams.get('status') || 'all'
+  const [saleTab, setSaleTab] = useState<'push' | 'won'>(
+    searchParams.get('status') === 'won' ? 'won' : 'push'
   );
+  const [statusFilter, setStatusFilter] = useState<string>(() => {
+    const param = searchParams.get('status');
+    return param && param !== 'won' ? param : 'all';
+  });
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [starredOnly, setStarredOnly] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
@@ -108,13 +112,31 @@ export function CustomersPage({
 
   useEffect(() => {
     const paramStatus = searchParams.get('status');
-    if (paramStatus && paramStatus !== statusFilter) {
+    if (paramStatus === 'won') {
+      setSaleTab('won');
+      setStatusFilter('all');
+    } else if (paramStatus) {
+      setSaleTab('push');
       setStatusFilter(paramStatus);
     }
-  }, [searchParams, statusFilter]);
+  }, [searchParams]);
+
+  const handleSaleTabChange = (nextTab: 'push' | 'won') => {
+    setSaleTab(nextTab);
+    setStatusFilter('all');
+    setRowSelection({});
+    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+    if (nextTab === 'won') {
+      setSearchParams({ status: 'won' }, { replace: true });
+    } else {
+      searchParams.delete('status');
+      setSearchParams(searchParams, { replace: true });
+    }
+  };
 
   const handleStatusFilterChange = (val: string) => {
     setStatusFilter(val);
+    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
     if (val === 'all') {
       searchParams.delete('status');
       setSearchParams(searchParams, { replace: true });
@@ -123,10 +145,25 @@ export function CustomersPage({
     }
   };
 
+  const pushCount = useMemo(
+    () => customers.filter((c) => c.status !== 'won').length,
+    [customers]
+  );
+  const wonCount = useMemo(
+    () => customers.filter((c) => c.status === 'won').length,
+    [customers]
+  );
+
   const filteredCustomers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return customers.filter((c) => {
-      if (statusFilter !== 'all' && c.status !== statusFilter) return false;
+      if (saleTab === 'won') {
+        if (c.status !== 'won') return false;
+      } else {
+        if (c.status === 'won') return false;
+        if (statusFilter !== 'all' && c.status !== statusFilter) return false;
+      }
+
       if (priorityFilter !== 'all' && c.priority !== priorityFilter) return false;
       if (starredOnly && !c.isStarred) return false;
 
@@ -146,7 +183,7 @@ export function CustomersPage({
         tagMatch
       );
     });
-  }, [customers, searchQuery, statusFilter, priorityFilter, starredOnly]);
+  }, [customers, saleTab, searchQuery, statusFilter, priorityFilter, starredOnly]);
 
   const handleToggleStar = async (customer: CustomerRecord) => {
     if (!workspace) return;
@@ -421,8 +458,51 @@ export function CustomersPage({
     setStarredOnly(false);
   };
 
+  const tabTotal = saleTab === 'won' ? wonCount : pushCount;
+
   return (
     <div className="space-y-4">
+      {/* Two-Tab Sales Segmentation: Cần push sale vs Đã bán */}
+      <div
+        role="tablist"
+        aria-label="Phân loại khách hàng theo tiến trình bán hàng"
+        className="grid grid-cols-2 gap-1.5 rounded-xl border border-border bg-muted/70 p-1 sm:inline-flex sm:w-auto"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={saleTab === 'push'}
+          onClick={() => handleSaleTabChange('push')}
+          className={`flex min-h-[44px] sm:min-h-[40px] items-center justify-center gap-2 rounded-lg px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+            saleTab === 'push'
+              ? 'bg-card text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <span>Cần push sale</span>
+          <span className="font-mono text-xs tabular-nums text-primary font-semibold">
+            {pushCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={saleTab === 'won'}
+          onClick={() => handleSaleTabChange('won')}
+          className={`flex min-h-[44px] sm:min-h-[40px] items-center justify-center gap-2 rounded-lg px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+            saleTab === 'won'
+              ? 'bg-card text-emerald-700 dark:text-emerald-300 shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <span>Đã bán</span>
+          <span className="font-mono text-xs tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
+            {wonCount}
+          </span>
+        </button>
+      </div>
+
       {/* Search & Filter Bar */}
       <div className="rounded-xl border border-border bg-card p-3.5 sm:p-4 space-y-3">
         <div className="flex flex-col md:flex-row gap-3">
@@ -431,7 +511,11 @@ export function CustomersPage({
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Tìm tên, số điện thoại, công ty, địa chỉ, thẻ, ghi chú..."
+              placeholder={
+                saleTab === 'won'
+                  ? 'Tìm khách đã bán theo tên, SĐT, địa chỉ...'
+                  : 'Tìm tên, số điện thoại, công ty, địa chỉ, ghi chú...'
+              }
               className="pl-9 pr-9"
             />
             {searchQuery && (
@@ -447,24 +531,28 @@ export function CustomersPage({
           </div>
 
           <div className="grid grid-cols-2 sm:flex items-center gap-2">
-            <SelectField
-              value={statusFilter}
-              onChange={(e) => handleStatusFilterChange(e.target.value)}
-              wrapperClassName="sm:w-44"
-              aria-label="Lọc theo trạng thái"
-            >
-              <option value="all">Tất cả trạng thái</option>
-              {Object.entries(CUSTOMER_STATUS_META).map(([k, m]) => (
-                <option key={k} value={k}>
-                  {m.label}
-                </option>
-              ))}
-            </SelectField>
+            {saleTab === 'push' && (
+              <SelectField
+                value={statusFilter}
+                onChange={(e) => handleStatusFilterChange(e.target.value)}
+                wrapperClassName="sm:w-44"
+                aria-label="Lọc theo trạng thái"
+              >
+                <option value="all">Tất cả cần push</option>
+                {Object.entries(CUSTOMER_STATUS_META)
+                  .filter(([k]) => k !== 'won')
+                  .map(([k, m]) => (
+                    <option key={k} value={k}>
+                      {m.label}
+                    </option>
+                  ))}
+              </SelectField>
+            )}
 
             <SelectField
               value={priorityFilter}
               onChange={(e) => setPriorityFilter(e.target.value)}
-              wrapperClassName="sm:w-36"
+              wrapperClassName={saleTab === 'won' ? 'col-span-2 sm:w-36' : 'sm:w-36'}
               aria-label="Lọc theo ưu tiên"
             >
               <option value="all">Mọi ưu tiên</option>
@@ -499,10 +587,16 @@ export function CustomersPage({
 
         {/* Summary & Desktop View Switcher */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-border text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="tabular-nums">
-              Hiển thị <strong className="text-foreground">{filteredCustomers.length}</strong> / {customers.length} khách hàng
+              Hiển thị <strong className="text-foreground">{filteredCustomers.length}</strong> / {tabTotal}{' '}
+              {saleTab === 'won' ? 'khách đã bán' : 'khách cần push sale'}
             </span>
+            {saleTab === 'won' && filteredCustomers.length > 0 && (
+              <span className="hidden sm:inline text-muted-foreground">
+                · Chạm Zalo hoặc Gọi để nhắn tin hỏi thăm sau bán
+              </span>
+            )}
             {(searchQuery || statusFilter !== 'all' || priorityFilter !== 'all' || starredOnly) && (
               <button
                 type="button"

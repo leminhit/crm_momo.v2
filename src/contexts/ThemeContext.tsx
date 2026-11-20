@@ -26,6 +26,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } else {
       root.classList.remove('dark');
     }
+    const themeMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeMeta) {
+      themeMeta.setAttribute('content', theme === 'dark' ? '#111827' : '#0f766e');
+    }
     window.localStorage.setItem(STORAGE_KEY, theme);
   }, [theme]);
 

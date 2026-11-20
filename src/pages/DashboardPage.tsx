@@ -143,7 +143,7 @@ export function DashboardPage({
             Thêm khách hàng đầu tiên
           </Button>
           <Button asChild variant="outline" size="lg" className="w-full sm:w-auto">
-            <Link to="/data">Nhập từ file Excel / Backup</Link>
+            <Link to="/settings">Nhập từ file Excel / Backup</Link>
           </Button>
         </div>
       </div>
