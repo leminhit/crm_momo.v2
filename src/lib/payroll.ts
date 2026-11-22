@@ -1,5 +1,5 @@
 import { format, parseISO } from 'date-fns';
-import type { CustomerRecord } from '../types/crm';
+import type { CustomerRecord, OrderRecord } from '../types/crm';
 
 export const PAYROLL_CONSTANTS = {
   BASE_SALARY: 5_000_000,
@@ -41,12 +41,27 @@ export function getCustomerMachineCount(customer: CustomerRecord): number {
   return customer.status === 'won' ? 1 : 0;
 }
 
-export function getCustomerSaleDate(customer: CustomerRecord): {
+export function getOrderMachineCount(order: Pick<OrderRecord, 'machineCount'>): number {
+  if (
+    typeof order.machineCount === 'number' &&
+    Number.isFinite(order.machineCount) &&
+    order.machineCount >= 1
+  ) {
+    return Math.floor(order.machineCount);
+  }
+  return 1;
+}
+
+function parseSaleDateString(
+  rawInput: string | undefined,
+  updatedAt: Date | null,
+  createdAt: Date | null
+): {
   dateStr: string;
   monthKey: string;
   isFallback: boolean;
 } {
-  const raw = (customer.soldAt ?? '').trim();
+  const raw = (rawInput ?? '').trim();
   if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
     const dateStr = raw.slice(0, 10);
     return {
@@ -63,13 +78,53 @@ export function getCustomerSaleDate(customer: CustomerRecord): {
     };
   }
 
-  const fallbackDate = customer.updatedAt ?? customer.createdAt ?? new Date();
+  const fallbackDate = updatedAt ?? createdAt ?? new Date();
   const dateStr = format(fallbackDate, 'yyyy-MM-dd');
   return {
     dateStr,
     monthKey: dateStr.slice(0, 7),
     isFallback: true,
   };
+}
+
+export function getCustomerSaleDate(customer: CustomerRecord): {
+  dateStr: string;
+  monthKey: string;
+  isFallback: boolean;
+} {
+  return parseSaleDateString(customer.soldAt, customer.updatedAt, customer.createdAt);
+}
+
+export function getOrderSaleDate(
+  order: Pick<OrderRecord, 'soldAt' | 'updatedAt' | 'createdAt'>
+): {
+  dateStr: string;
+  monthKey: string;
+  isFallback: boolean;
+} {
+  return parseSaleDateString(order.soldAt, order.updatedAt, order.createdAt);
+}
+
+export function generateSuggestedOrderCode(
+  orders: Pick<OrderRecord, 'orderCode'>[],
+  soldAt: string = getTodayDateString()
+): string {
+  const match = /^(\d{4})-(\d{2})/.exec(soldAt.trim());
+  const yymm = match ? `${match[1].slice(2)}${match[2]}` : format(new Date(), 'yyMM');
+  const prefix = `DH-${yymm}-`;
+  const existingCodes = new Set(
+    orders.map((o) => o.orderCode.trim().toUpperCase())
+  );
+
+  let seq = 1;
+  while (seq < 10000) {
+    const candidate = `${prefix}${String(seq).padStart(3, '0')}`;
+    if (!existingCodes.has(candidate)) {
+      return candidate;
+    }
+    seq += 1;
+  }
+  return `${prefix}${Date.now().toString().slice(-4)}`;
 }
 
 export interface PayrollBreakdown {
@@ -112,49 +167,190 @@ export function calculateMonthlyPayroll(totalMachines: number): PayrollBreakdown
   };
 }
 
+export interface UnifiedSaleEntry {
+  id: string;
+  isLegacyFallback: boolean;
+  order: OrderRecord | null;
+  customer: CustomerRecord | null;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  orderCode: string;
+  address: string;
+  googleMapsUrl: string;
+  note: string;
+  machines: number;
+  saleDate: string;
+  monthKey: string;
+  isFallbackDate: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export function getUnifiedSaleEntries(
+  customers: CustomerRecord[],
+  orders: OrderRecord[] = []
+): UnifiedSaleEntry[] {
+  const customerMap = new Map<string, CustomerRecord>();
+  for (const c of customers) {
+    customerMap.set(c.id, c);
+  }
+
+  const customerIdsWithOrders = new Set<string>();
+  const entries: UnifiedSaleEntry[] = [];
+
+  for (const order of orders) {
+    customerIdsWithOrders.add(order.customerId);
+    const customer = customerMap.get(order.customerId) ?? null;
+    const primaryPhone = customer
+      ? (customer.phones.find((p) => p.isPrimary) ?? customer.phones[0])?.number ?? ''
+      : '';
+    const { dateStr, monthKey, isFallback } = getOrderSaleDate(order);
+
+    entries.push({
+      id: order.id,
+      isLegacyFallback: false,
+      order,
+      customer,
+      customerId: order.customerId,
+      customerName: customer?.fullName || order.customerName || 'Khách hàng',
+      customerPhone: primaryPhone || order.customerPhone || '',
+      orderCode: order.orderCode,
+      address: order.address || customer?.address || '',
+      googleMapsUrl: order.googleMapsUrl || customer?.googleMapsUrl || '',
+      note: order.note,
+      machines: getOrderMachineCount(order),
+      saleDate: dateStr,
+      monthKey,
+      isFallbackDate: isFallback,
+      createdAtMs: order.createdAt ? order.createdAt.getTime() : 0,
+      updatedAtMs: order.updatedAt ? order.updatedAt.getTime() : 0,
+    });
+  }
+
+  // Legacy compatibility: customers already marked "won" before the Orders tab existed
+  for (const c of customers) {
+    if (c.status !== 'won' || customerIdsWithOrders.has(c.id)) continue;
+    const primaryPhone = (c.phones.find((p) => p.isPrimary) ?? c.phones[0])?.number ?? '';
+    const { dateStr, monthKey, isFallback } = getCustomerSaleDate(c);
+
+    entries.push({
+      id: `legacy_${c.id}`,
+      isLegacyFallback: true,
+      order: null,
+      customer: c,
+      customerId: c.id,
+      customerName: c.fullName,
+      customerPhone: primaryPhone,
+      orderCode: 'Đơn cũ',
+      address: c.address,
+      googleMapsUrl: c.googleMapsUrl,
+      note: c.quickNote,
+      machines: getCustomerMachineCount(c),
+      saleDate: dateStr,
+      monthKey,
+      isFallbackDate: isFallback,
+      createdAtMs: c.createdAt ? c.createdAt.getTime() : 0,
+      updatedAtMs: c.updatedAt ? c.updatedAt.getTime() : 0,
+    });
+  }
+
+  return entries;
+}
+
+export interface WonCustomerMonthEntry {
+  customer: CustomerRecord;
+  ordersCount: number;
+  machinesInMonth: number;
+  latestSaleDate: string;
+  isFallbackDate: boolean;
+  monthOrders: UnifiedSaleEntry[];
+}
+
 export interface MonthlySalesGroup {
   monthKey: string;
   label: string;
+  entries: WonCustomerMonthEntry[];
   customers: CustomerRecord[];
   customerCount: number;
+  orderCount: number;
   totalMachines: number;
 }
 
-export function groupWonCustomersByMonth(customers: CustomerRecord[]): MonthlySalesGroup[] {
-  const map = new Map<string, CustomerRecord[]>();
+export function groupWonCustomersByMonth(
+  customers: CustomerRecord[],
+  orders: OrderRecord[] = []
+): MonthlySalesGroup[] {
+  const allowedCustomerMap = new Map(customers.map((c) => [c.id, c]));
+  const allEntries = getUnifiedSaleEntries(customers, orders);
 
-  for (const c of customers) {
-    if (c.status !== 'won') continue;
-    const { monthKey } = getCustomerSaleDate(c);
-    const list = map.get(monthKey);
+  // monthKey -> customerId -> UnifiedSaleEntry[]
+  const monthMap = new Map<string, Map<string, UnifiedSaleEntry[]>>();
+
+  for (const entry of allEntries) {
+    const customer = allowedCustomerMap.get(entry.customerId);
+    if (!customer) continue;
+    let custMap = monthMap.get(entry.monthKey);
+    if (!custMap) {
+      custMap = new Map<string, UnifiedSaleEntry[]>();
+      monthMap.set(entry.monthKey, custMap);
+    }
+    const list = custMap.get(entry.customerId);
     if (list) {
-      list.push(c);
+      list.push(entry);
     } else {
-      map.set(monthKey, [c]);
+      custMap.set(entry.customerId, [entry]);
     }
   }
 
   const groups: MonthlySalesGroup[] = [];
-  for (const [monthKey, items] of map.entries()) {
-    const sorted = [...items].sort((a, b) => {
-      const da = getCustomerSaleDate(a).dateStr;
-      const db = getCustomerSaleDate(b).dateStr;
-      if (da !== db) return db.localeCompare(da);
-      const ta = a.updatedAt ? a.updatedAt.getTime() : 0;
-      const tb = b.updatedAt ? b.updatedAt.getTime() : 0;
+
+  for (const [monthKey, custMap] of monthMap.entries()) {
+    const monthEntries: WonCustomerMonthEntry[] = [];
+    let orderCount = 0;
+    let totalMachines = 0;
+
+    for (const [customerId, custOrders] of custMap.entries()) {
+      const customer = allowedCustomerMap.get(customerId);
+      if (!customer) continue;
+
+      const sortedCustOrders = [...custOrders].sort((a, b) => {
+        if (a.saleDate !== b.saleDate) return b.saleDate.localeCompare(a.saleDate);
+        return b.updatedAtMs - a.updatedAtMs;
+      });
+
+      const machinesInMonth = sortedCustOrders.reduce((s, o) => s + o.machines, 0);
+      const latest = sortedCustOrders[0];
+
+      orderCount += sortedCustOrders.length;
+      totalMachines += machinesInMonth;
+
+      monthEntries.push({
+        customer,
+        ordersCount: sortedCustOrders.length,
+        machinesInMonth,
+        latestSaleDate: latest.saleDate,
+        isFallbackDate: sortedCustOrders.every((o) => o.isFallbackDate),
+        monthOrders: sortedCustOrders,
+      });
+    }
+
+    monthEntries.sort((a, b) => {
+      if (a.latestSaleDate !== b.latestSaleDate) {
+        return b.latestSaleDate.localeCompare(a.latestSaleDate);
+      }
+      const ta = a.customer.updatedAt ? a.customer.updatedAt.getTime() : 0;
+      const tb = b.customer.updatedAt ? b.customer.updatedAt.getTime() : 0;
       return tb - ta;
     });
-
-    const totalMachines = sorted.reduce(
-      (sum, item) => sum + getCustomerMachineCount(item),
-      0
-    );
 
     groups.push({
       monthKey,
       label: formatMonthLabel(monthKey),
-      customers: sorted,
-      customerCount: sorted.length,
+      entries: monthEntries,
+      customers: monthEntries.map((e) => e.customer),
+      customerCount: monthEntries.length,
+      orderCount,
       totalMachines,
     });
   }
@@ -163,8 +359,11 @@ export function groupWonCustomersByMonth(customers: CustomerRecord[]): MonthlySa
   return groups;
 }
 
-export interface PayrollCustomerLine {
-  customer: CustomerRecord;
+export interface PayrollOrderLine {
+  entry: UnifiedSaleEntry;
+  customer: CustomerRecord | null;
+  order: OrderRecord | null;
+  orderCode: string;
   saleDate: string;
   isFallbackDate: boolean;
   machines: number;
@@ -179,35 +378,34 @@ export interface MonthlyPayrollReport {
   monthKey: string;
   monthLabel: string;
   breakdown: PayrollBreakdown;
+  orderCount: number;
   customerCount: number;
-  lines: PayrollCustomerLine[];
+  lines: PayrollOrderLine[];
   hasFallbackDates: boolean;
 }
 
 export function buildMonthlyPayrollReport(
   customers: CustomerRecord[],
-  monthKey: string
+  orders: OrderRecord[] = [],
+  monthKey: string = getCurrentMonthKey()
 ): MonthlyPayrollReport {
-  const monthSold = customers
-    .filter((c) => c.status === 'won' && getCustomerSaleDate(c).monthKey === monthKey)
+  const monthEntries = getUnifiedSaleEntries(customers, orders)
+    .filter((entry) => entry.monthKey === monthKey)
     .sort((a, b) => {
-      const da = getCustomerSaleDate(a).dateStr;
-      const db = getCustomerSaleDate(b).dateStr;
-      if (da !== db) return da.localeCompare(db);
-      const ta = a.createdAt ? a.createdAt.getTime() : 0;
-      const tb = b.createdAt ? b.createdAt.getTime() : 0;
-      return ta - tb;
+      if (a.saleDate !== b.saleDate) return a.saleDate.localeCompare(b.saleDate);
+      return a.createdAtMs - b.createdAtMs;
     });
 
   let cumulative = 0;
   let hasFallbackDates = false;
-  const lines: PayrollCustomerLine[] = [];
+  const distinctCustomers = new Set<string>();
+  const lines: PayrollOrderLine[] = [];
 
-  for (const customer of monthSold) {
-    const { dateStr, isFallback } = getCustomerSaleDate(customer);
-    if (isFallback) hasFallbackDates = true;
+  for (const entry of monthEntries) {
+    if (entry.isFallbackDate) hasFallbackDates = true;
+    distinctCustomers.add(entry.customerId);
 
-    const machines = getCustomerMachineCount(customer);
+    const machines = entry.machines;
     const prevPayroll = calculateMonthlyPayroll(cumulative);
     const nextPayroll = calculateMonthlyPayroll(cumulative + machines);
 
@@ -220,9 +418,12 @@ export function buildMonthlyPayrollReport(
     cumulative += machines;
 
     lines.push({
-      customer,
-      saleDate: dateStr,
-      isFallbackDate: isFallback,
+      entry,
+      customer: entry.customer,
+      order: entry.order,
+      orderCode: entry.orderCode,
+      saleDate: entry.saleDate,
+      isFallbackDate: entry.isFallbackDate,
       machines,
       startIndex,
       endIndex,
@@ -236,7 +437,8 @@ export function buildMonthlyPayrollReport(
     monthKey,
     monthLabel: formatMonthLabel(monthKey),
     breakdown: calculateMonthlyPayroll(cumulative),
-    customerCount: lines.length,
+    orderCount: lines.length,
+    customerCount: distinctCustomers.size,
     lines,
     hasFallbackDates,
   };

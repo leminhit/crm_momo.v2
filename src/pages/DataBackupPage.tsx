@@ -28,7 +28,7 @@ import {
 import { CUSTOMER_STATUS_META } from '../types/crm';
 
 export function DataBackupPage() {
-  const { user, profile, workspace, customers } = useCrm();
+  const { user, profile, workspace, customers, orders } = useCrm();
 
   const [exportStatusFilter, setExportStatusFilter] = useState<string>('all');
   const [excelPreview, setExcelPreview] = useState<CustomerInputPayload[]>([]);
@@ -115,7 +115,7 @@ export function DataBackupPage() {
     if (!user || !workspace) return;
     setExportingJson(true);
     try {
-      const bundle = await buildBackupBundle(workspace, customers, user.uid);
+      const bundle = await buildBackupBundle(workspace, customers, orders, user.uid);
       const blob = new Blob([JSON.stringify(bundle, null, 2)], {
         type: 'application/json;charset=utf-8',
       });
@@ -128,7 +128,7 @@ export function DataBackupPage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       toast.success(
-        `Đã tải xuống bản sao lưu (${bundle.customers.length} khách hàng và toàn bộ ghi chú)`
+        `Đã tải xuống bản sao lưu (${bundle.customers.length} khách hàng, ${bundle.orders?.length ?? 0} đơn hàng)`
       );
     } catch {
       toast.error('Không thể tạo file sao lưu JSON.');
@@ -166,16 +166,18 @@ export function DataBackupPage() {
     setRestoringJson(true);
     try {
       const existingIds = new Set(customers.map((c) => c.id));
+      const existingOrderIds = new Set(orders.map((o) => o.id));
       const summary = await restoreCustomersFromBackup(
         workspace.id,
         user.uid,
         profile?.displayName || user.displayName || 'Tôi',
         pendingBackup,
         existingIds,
+        existingOrderIds,
         restoreMode
       );
       toast.success(
-        `Khôi phục xong: thêm ${summary.created}, cập nhật ${summary.updated}, bỏ qua ${summary.skipped}`
+        `Khôi phục xong: thêm ${summary.created} khách, cập nhật ${summary.updated}, bỏ qua ${summary.skipped}${summary.ordersRestored > 0 ? `, đơn hàng ${summary.ordersRestored}` : ''}`
       );
       setPendingBackup(null);
       setBackupFileName('');

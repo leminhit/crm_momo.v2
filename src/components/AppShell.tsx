@@ -6,6 +6,7 @@ import {
   Moon,
   Plus,
   Settings,
+  ShoppingBag,
   Sun,
   Users,
 } from 'lucide-react';
@@ -22,6 +23,7 @@ import { DashboardPage } from '../pages/DashboardPage';
 import type { CustomerRecord } from '../types/crm';
 
 const loadCustomersPage = () => import('../pages/CustomersPage');
+const loadOrdersPage = () => import('../pages/OrdersPage');
 const loadPayrollPage = () => import('../pages/PayrollPage');
 const loadFollowUpsPage = () => import('../pages/FollowUpsPage');
 const loadSettingsPage = () => import('../pages/SettingsPage');
@@ -29,6 +31,9 @@ const loadCustomerDetailDrawer = () => import('./CustomerDetailDrawer');
 
 const CustomersPage = lazy(() =>
   loadCustomersPage().then((m) => ({ default: m.CustomersPage }))
+);
+const OrdersPage = lazy(() =>
+  loadOrdersPage().then((m) => ({ default: m.OrdersPage }))
 );
 const PayrollPage = lazy(() =>
   loadPayrollPage().then((m) => ({ default: m.PayrollPage }))
@@ -59,6 +64,7 @@ function RoutePageFallback() {
 const NAV_ITEMS = [
   { to: '/', label: 'Tổng quan', icon: LayoutDashboard, end: true },
   { to: '/customers', label: 'Khách hàng', icon: Users, end: false },
+  { to: '/orders', label: 'Đơn hàng', icon: ShoppingBag, end: false },
   { to: '/payroll', label: 'Bảng lương', icon: Banknote, end: false },
   { to: '/follow-ups', label: 'Chăm sóc', icon: CalendarClock, end: false },
   { to: '/settings', label: 'Cài đặt', icon: Settings, end: false },
@@ -67,6 +73,7 @@ const NAV_ITEMS = [
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Tổng quan CRM',
   '/customers': 'Danh sách khách hàng',
+  '/orders': 'Quản lý đơn hàng',
   '/payroll': 'Bảng lương & Hoa hồng',
   '/follow-ups': 'Lịch hẹn & Chăm sóc',
   '/settings': 'Cài đặt & Dữ liệu',
@@ -106,6 +113,7 @@ export function AppShell() {
 
     const prefetchChunks = () => {
       void loadCustomersPage();
+      void loadOrdersPage();
       void loadPayrollPage();
       void loadCustomerDetailDrawer();
     };
@@ -234,6 +242,21 @@ export function AppShell() {
             </Button>
 
             <NavLink
+              to="/orders"
+              className={({ isActive }) =>
+                `md:hidden inline-flex h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium whitespace-nowrap transition-colors ${
+                  isActive
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`
+              }
+              aria-label="Đơn hàng"
+            >
+              <ShoppingBag className="h-4 w-4 shrink-0" />
+              <span>Đơn hàng</span>
+            </NavLink>
+
+            <NavLink
               to="/settings"
               className={({ isActive }) =>
                 `md:hidden flex h-10 w-10 items-center justify-center rounded-lg transition-colors ${
@@ -281,6 +304,10 @@ export function AppShell() {
                     onSelectCustomer={handleSelectCustomer}
                   />
                 }
+              />
+              <Route
+                path="/orders"
+                element={<OrdersPage onSelectCustomer={handleSelectCustomer} />}
               />
               <Route
                 path="/payroll"

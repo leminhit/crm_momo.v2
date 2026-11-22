@@ -15,8 +15,13 @@ import {
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
-import { ensureUserWorkspace, mapCustomerDoc } from '../lib/crm-service';
-import type { CustomerRecord, UserProfileRecord, WorkspaceRecord } from '../types/crm';
+import { ensureUserWorkspace, mapCustomerDoc, mapOrderDoc } from '../lib/crm-service';
+import type {
+  CustomerRecord,
+  OrderRecord,
+  UserProfileRecord,
+  WorkspaceRecord,
+} from '../types/crm';
 
 interface CachedSessionHint {
   uid: string;
@@ -91,6 +96,7 @@ interface CrmContextValue {
   profile: UserProfileRecord | null;
   workspace: WorkspaceRecord | null;
   customers: CustomerRecord[];
+  orders: OrderRecord[];
   loadingAuth: boolean;
   loadingData: boolean;
   signingIn: boolean;
@@ -116,6 +122,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
     initialHintRef.current ? buildWorkspaceFromHint(initialHintRef.current) : null
   );
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
+  const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [loadingAuth, setLoadingAuth] = useState<boolean>(!initialHintRef.current);
   const [loadingData, setLoadingData] = useState<boolean>(Boolean(initialHintRef.current));
   const [signingIn, setSigningIn] = useState(false);
@@ -151,6 +158,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
         setProfile(null);
         setWorkspace(null);
         setCustomers([]);
+        setOrders([]);
         workspaceReadyPromiseRef.current = null;
         setLoadingAuth(false);
         setLoadingData(false);
@@ -245,14 +253,22 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
     }
 
     setLoadingData(true);
+    let customersReady = false;
+    let ordersReady = false;
+    const markReadyIfBoth = () => {
+      if (customersReady && ordersReady) {
+        setLoadingData(false);
+      }
+    };
+
     const customersPath = `workspaces/${activeWorkspaceId}/customers`;
-    const q = query(
+    const customersQuery = query(
       collection(db, 'workspaces', activeWorkspaceId, 'customers'),
       where('ownerId', '==', activeUserId)
     );
 
-    const unsub = onSnapshot(
-      q,
+    const unsubCustomers = onSnapshot(
+      customersQuery,
       (snapshot) => {
         const list = snapshot.docs.map((d) => mapCustomerDoc(d.id, d.data()));
         list.sort((a, b) => {
@@ -261,10 +277,12 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
           return tb - ta;
         });
         setCustomers(list);
-        setLoadingData(false);
+        customersReady = true;
+        markReadyIfBoth();
       },
       (error) => {
-        setLoadingData(false);
+        customersReady = true;
+        markReadyIfBoth();
         try {
           handleFirestoreError(error, OperationType.LIST, customersPath);
         } catch (wrapped) {
@@ -273,7 +291,41 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
       }
     );
 
-    return () => unsub();
+    const ordersPath = `workspaces/${activeWorkspaceId}/orders`;
+    const ordersQuery = query(
+      collection(db, 'workspaces', activeWorkspaceId, 'orders'),
+      where('ownerId', '==', activeUserId)
+    );
+
+    const unsubOrders = onSnapshot(
+      ordersQuery,
+      (snapshot) => {
+        const list = snapshot.docs.map((d) => mapOrderDoc(d.id, d.data()));
+        list.sort((a, b) => {
+          if (a.soldAt !== b.soldAt) return b.soldAt.localeCompare(a.soldAt);
+          const ta = a.createdAt ? a.createdAt.getTime() : 0;
+          const tb = b.createdAt ? b.createdAt.getTime() : 0;
+          return tb - ta;
+        });
+        setOrders(list);
+        ordersReady = true;
+        markReadyIfBoth();
+      },
+      (error) => {
+        ordersReady = true;
+        markReadyIfBoth();
+        try {
+          handleFirestoreError(error, OperationType.LIST, ordersPath);
+        } catch (wrapped) {
+          setFatalError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+        }
+      }
+    );
+
+    return () => {
+      unsubCustomers();
+      unsubOrders();
+    };
   }, [activeUserId, activeWorkspaceId]);
 
   const ensureWorkspaceReady = useCallback(async () => {
@@ -357,6 +409,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
         profile,
         workspace,
         customers,
+        orders,
         loadingAuth,
         loadingData,
         signingIn,

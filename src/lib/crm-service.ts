@@ -23,6 +23,7 @@ import type {
   CustomerRecord,
   CustomerStatus,
   NoteInteractionType,
+  OrderRecord,
   PhoneEntry,
   UserProfileRecord,
   WorkspaceRecord,
@@ -88,6 +89,28 @@ export function mapNoteDoc(id: string, data: Record<string, unknown>): CustomerN
     type: (data.type as NoteInteractionType) ?? 'note',
     content: String(data.content ?? ''),
     createdAt: toDateOrNull(data.createdAt),
+  };
+}
+
+export function mapOrderDoc(id: string, data: Record<string, unknown>): OrderRecord {
+  return {
+    id,
+    workspaceId: String(data.workspaceId ?? ''),
+    ownerId: String(data.ownerId ?? ''),
+    customerId: String(data.customerId ?? ''),
+    customerName: String(data.customerName ?? ''),
+    customerPhone: String(data.customerPhone ?? ''),
+    orderCode: String(data.orderCode ?? ''),
+    address: String(data.address ?? ''),
+    googleMapsUrl: String(data.googleMapsUrl ?? ''),
+    soldAt: String(data.soldAt ?? ''),
+    note: String(data.note ?? ''),
+    machineCount:
+      typeof data.machineCount === 'number' && Number.isFinite(data.machineCount)
+        ? Math.max(1, Math.floor(data.machineCount))
+        : 1,
+    createdAt: toDateOrNull(data.createdAt),
+    updatedAt: toDateOrNull(data.updatedAt),
   };
 }
 
@@ -469,12 +492,27 @@ export async function deleteCustomer(
   const notesPath = `workspaces/${workspaceId}/customers/${customerId}/notes`;
   const customerPath = `workspaces/${workspaceId}/customers/${customerId}`;
   try {
-    const notesSnap = await getDocs(
-      query(collection(db, 'workspaces', workspaceId, 'customers', customerId, 'notes'), where('authorId', '==', uid))
+    const [notesSnap, ordersSnap] = await Promise.all([
+      getDocs(
+        query(
+          collection(db, 'workspaces', workspaceId, 'customers', customerId, 'notes'),
+          where('authorId', '==', uid)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, 'workspaces', workspaceId, 'orders'),
+          where('ownerId', '==', uid)
+        )
+      ),
+    ]);
+    const matchingOrderDocs = ordersSnap.docs.filter(
+      (d) => d.data().customerId === customerId
     );
-    if (!notesSnap.empty) {
+    if (!notesSnap.empty || matchingOrderDocs.length > 0) {
       const batch = writeBatch(db);
       notesSnap.docs.forEach((d) => batch.delete(d.ref));
+      matchingOrderDocs.forEach((d) => batch.delete(d.ref));
       batch.delete(doc(db, 'workspaces', workspaceId, 'customers', customerId));
       await batch.commit();
     } else {
@@ -570,6 +608,154 @@ export async function deleteCustomerNote(
   }
 }
 
+export interface OrderInputPayload {
+  customerId: string;
+  orderCode: string;
+  soldAt: string;
+  address: string;
+  googleMapsUrl: string;
+  note: string;
+  machineCount?: number;
+}
+
+function getCustomerPrimaryPhone(customer: Pick<CustomerRecord, 'phones'>): string {
+  const primary = customer.phones.find((p) => p.isPrimary) ?? customer.phones[0];
+  return (primary?.number ?? '').trim().slice(0, CRM_LIMITS.PHONE_MAX);
+}
+
+function sanitizeOrderFields(customer: CustomerRecord, input: OrderInputPayload) {
+  const cleanOrderCode =
+    input.orderCode.trim().slice(0, CRM_LIMITS.ORDER_CODE_MAX) || 'DH-001';
+  const cleanSoldAt =
+    input.soldAt.trim().slice(0, CRM_LIMITS.SOLD_AT_MAX) || getTodayDateString();
+  const cleanAddress = input.address.trim().slice(0, CRM_LIMITS.ADDRESS_MAX);
+  const cleanMaps = input.googleMapsUrl.trim().slice(0, CRM_LIMITS.MAPS_URL_MAX);
+  const cleanNote = input.note.trim().slice(0, CRM_LIMITS.ORDER_NOTE_MAX);
+  const cleanMachines =
+    typeof input.machineCount === 'number' && Number.isFinite(input.machineCount)
+      ? Math.min(CRM_LIMITS.MACHINE_COUNT_MAX, Math.max(1, Math.floor(input.machineCount)))
+      : 1;
+
+  return {
+    customerId: customer.id,
+    customerName:
+      customer.fullName.trim().slice(0, CRM_LIMITS.FULL_NAME_MAX) || 'Khách hàng',
+    customerPhone: getCustomerPrimaryPhone(customer),
+    orderCode: cleanOrderCode,
+    address: cleanAddress,
+    googleMapsUrl: cleanMaps,
+    soldAt: cleanSoldAt,
+    note: cleanNote,
+    machineCount: cleanMachines,
+  };
+}
+
+export async function createOrderWithCustomerSync(
+  workspaceId: string,
+  ownerId: string,
+  customer: CustomerRecord,
+  input: OrderInputPayload,
+  options?: {
+    migrateLegacyOrder?: boolean;
+    legacySoldAt?: string;
+    legacyMachineCount?: number;
+  }
+): Promise<string> {
+  const orderId = generateFirestoreId('ord');
+  const path = `workspaces/${workspaceId}/orders/${orderId}`;
+  const clean = sanitizeOrderFields(customer, input);
+  const batch = writeBatch(db);
+
+  batch.set(doc(db, 'workspaces', workspaceId, 'orders', orderId), {
+    id: orderId,
+    workspaceId,
+    ownerId,
+    ...clean,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  if (options?.migrateLegacyOrder) {
+    const legacyOrderId = generateFirestoreId('ord');
+    const legacySoldAt =
+      (options.legacySoldAt ?? '').trim().slice(0, CRM_LIMITS.SOLD_AT_MAX) ||
+      getTodayDateString();
+    const legacyMachines =
+      typeof options.legacyMachineCount === 'number' &&
+      Number.isFinite(options.legacyMachineCount)
+        ? Math.min(
+            CRM_LIMITS.MACHINE_COUNT_MAX,
+            Math.max(1, Math.floor(options.legacyMachineCount))
+          )
+        : 1;
+    const legacyCode = `${clean.orderCode}-CU`.slice(0, CRM_LIMITS.ORDER_CODE_MAX);
+    batch.set(doc(db, 'workspaces', workspaceId, 'orders', legacyOrderId), {
+      id: legacyOrderId,
+      workspaceId,
+      ownerId,
+      customerId: customer.id,
+      customerName: clean.customerName,
+      customerPhone: clean.customerPhone,
+      orderCode: legacyCode,
+      address: customer.address.trim().slice(0, CRM_LIMITS.ADDRESS_MAX),
+      googleMapsUrl: customer.googleMapsUrl.trim().slice(0, CRM_LIMITS.MAPS_URL_MAX),
+      soldAt: legacySoldAt,
+      note: 'Đơn cũ trước khi tách đơn hàng',
+      machineCount: legacyMachines,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  // Auto-transition customer from any non-won status (e.g., Chăm sóc sau) to Đã bán
+  if (customer.status !== 'won') {
+    batch.update(doc(db, 'workspaces', workspaceId, 'customers', customer.id), {
+      status: 'won',
+      soldAt: customer.soldAt?.trim() || clean.soldAt,
+      machineCount: Math.max(1, customer.machineCount || 1),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  try {
+    await batch.commit();
+    return orderId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function updateOrder(
+  workspaceId: string,
+  orderId: string,
+  customer: CustomerRecord,
+  input: OrderInputPayload
+): Promise<void> {
+  const path = `workspaces/${workspaceId}/orders/${orderId}`;
+  const clean = sanitizeOrderFields(customer, input);
+
+  try {
+    await updateDoc(doc(db, 'workspaces', workspaceId, 'orders', orderId), {
+      ...clean,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteOrder(
+  workspaceId: string,
+  orderId: string
+): Promise<void> {
+  const path = `workspaces/${workspaceId}/orders/${orderId}`;
+  try {
+    await deleteDoc(doc(db, 'workspaces', workspaceId, 'orders', orderId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
 export interface CrmBackupBundle {
   version: 1;
   exportedAt: string;
@@ -588,11 +774,26 @@ export interface CrmBackupBundle {
       }>;
     }
   >;
+  orders?: Array<{
+    id: string;
+    customerId: string;
+    customerName: string;
+    customerPhone: string;
+    orderCode: string;
+    address: string;
+    googleMapsUrl: string;
+    soldAt: string;
+    note: string;
+    machineCount: number;
+    createdAtIso?: string;
+    updatedAtIso?: string;
+  }>;
 }
 
 export async function buildBackupBundle(
   workspace: WorkspaceRecord,
   customers: CustomerRecord[],
+  orders: OrderRecord[],
   uid: string
 ): Promise<CrmBackupBundle> {
   const customersWithNotes = await Promise.all(
@@ -659,6 +860,20 @@ export async function buildBackupBundle(
     exportedAt: new Date().toISOString(),
     workspaceName: workspace.name,
     customers: customersWithNotes,
+    orders: orders.map((o) => ({
+      id: o.id,
+      customerId: o.customerId,
+      customerName: o.customerName,
+      customerPhone: o.customerPhone,
+      orderCode: o.orderCode,
+      address: o.address,
+      googleMapsUrl: o.googleMapsUrl,
+      soldAt: o.soldAt,
+      note: o.note,
+      machineCount: o.machineCount,
+      createdAtIso: o.createdAt ? o.createdAt.toISOString() : undefined,
+      updatedAtIso: o.updatedAt ? o.updatedAt.toISOString() : undefined,
+    })),
   };
 }
 
@@ -668,11 +883,17 @@ export async function restoreCustomersFromBackup(
   authorName: string,
   bundle: CrmBackupBundle,
   existingCustomerIds: Set<string>,
+  existingOrderIds: Set<string>,
   mode: 'skip-existing' | 'overwrite-existing'
-): Promise<{ created: number; updated: number; skipped: number }> {
+): Promise<{ created: number; updated: number; skipped: number; ordersRestored: number }> {
   let created = 0;
   let updated = 0;
   let skipped = 0;
+  let ordersRestored = 0;
+
+  // Map original bundle customerId -> resolved Firestore customerId
+  const customerIdMap = new Map<string, string>();
+  const allValidCustomerIds = new Set<string>(existingCustomerIds);
 
   // Chunk customer writes safely under Firestore 500-op batch limit
   const batchOps: Array<{
@@ -687,6 +908,9 @@ export async function restoreCustomersFromBackup(
       item.id && CRM_LIMITS.ID_PATTERN.test(item.id)
         ? item.id.slice(0, CRM_LIMITS.ID_MAX)
         : generateFirestoreId('cust');
+    customerIdMap.set(item.id, safeId);
+    allValidCustomerIds.add(safeId);
+
     const exists = existingCustomerIds.has(safeId);
 
     if (exists && mode === 'skip-existing') {
@@ -773,5 +997,81 @@ export async function restoreCustomersFromBackup(
     }
   }
 
-  return { created, updated, skipped };
+  // Restore orders AFTER customers are committed so Firestore exists() check succeeds
+  if (Array.isArray(bundle.orders) && bundle.orders.length > 0) {
+    const orderOps: Array<{
+      type: 'create' | 'update';
+      id: string;
+      customerId: string;
+      data: NonNullable<CrmBackupBundle['orders']>[number];
+    }> = [];
+
+    for (const ord of bundle.orders) {
+      const resolvedCustId = customerIdMap.get(ord.customerId) ?? ord.customerId;
+      if (!CRM_LIMITS.ID_PATTERN.test(resolvedCustId) || !allValidCustomerIds.has(resolvedCustId)) {
+        continue;
+      }
+      const safeOrderId =
+        ord.id && CRM_LIMITS.ID_PATTERN.test(ord.id)
+          ? ord.id.slice(0, CRM_LIMITS.ID_MAX)
+          : generateFirestoreId('ord');
+      const exists = existingOrderIds.has(safeOrderId);
+      if (exists && mode === 'skip-existing') {
+        continue;
+      }
+      orderOps.push({
+        type: exists ? 'update' : 'create',
+        id: safeOrderId,
+        customerId: resolvedCustId,
+        data: ord,
+      });
+    }
+
+    for (let i = 0; i < orderOps.length; i += chunkSize) {
+      const chunk = orderOps.slice(i, i + chunkSize);
+      const batch = writeBatch(db);
+
+      for (const op of chunk) {
+        const ref = doc(db, 'workspaces', workspaceId, 'orders', op.id);
+        const cleanPayload = {
+          customerId: op.customerId,
+          customerName: (op.data.customerName || 'Khách hàng').trim().slice(0, CRM_LIMITS.FULL_NAME_MAX),
+          customerPhone: (op.data.customerPhone || '').trim().slice(0, CRM_LIMITS.PHONE_MAX),
+          orderCode: (op.data.orderCode || 'DH-001').trim().slice(0, CRM_LIMITS.ORDER_CODE_MAX),
+          address: (op.data.address || '').trim().slice(0, CRM_LIMITS.ADDRESS_MAX),
+          googleMapsUrl: (op.data.googleMapsUrl || '').trim().slice(0, CRM_LIMITS.MAPS_URL_MAX),
+          soldAt: (op.data.soldAt || getTodayDateString()).trim().slice(0, CRM_LIMITS.SOLD_AT_MAX),
+          note: (op.data.note || '').trim().slice(0, CRM_LIMITS.ORDER_NOTE_MAX),
+          machineCount: Math.min(
+            CRM_LIMITS.MACHINE_COUNT_MAX,
+            Math.max(1, Math.floor(Number(op.data.machineCount) || 1))
+          ),
+        };
+        if (op.type === 'update') {
+          batch.update(ref, {
+            ...cleanPayload,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          batch.set(ref, {
+            id: op.id,
+            workspaceId,
+            ownerId,
+            ...cleanPayload,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+        ordersRestored += 1;
+      }
+
+      try {
+        await batch.commit();
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, `workspaces/${workspaceId}/orders`);
+      }
+    }
+  }
+
+  return { created, updated, skipped, ordersRestored };
 }

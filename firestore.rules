@@ -141,6 +141,33 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidOrder(data, workspaceId, orderId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'ownerId', 'customerId', 'customerName',
+          'customerPhone', 'orderCode', 'address', 'googleMapsUrl', 'soldAt',
+          'note', 'machineCount', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'ownerId', 'customerId', 'customerName',
+          'customerPhone', 'orderCode', 'address', 'googleMapsUrl', 'soldAt',
+          'note', 'machineCount', 'createdAt', 'updatedAt'
+        ])
+        && data.id is string && data.id == orderId && isValidId(data.id)
+        && data.workspaceId is string && data.workspaceId == workspaceId && isValidId(data.workspaceId)
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.customerId is string && isValidId(data.customerId)
+        && data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 120
+        && data.customerPhone is string && data.customerPhone.size() <= 30
+        && data.orderCode is string && data.orderCode.size() >= 1 && data.orderCode.size() <= 60
+        && data.address is string && data.address.size() <= 300
+        && data.googleMapsUrl is string && data.googleMapsUrl.size() <= 500
+        && data.soldAt is string && data.soldAt.size() >= 1 && data.soldAt.size() <= 32
+        && data.note is string && data.note.size() <= 1000
+        && (data.machineCount is int || data.machineCount is float) && data.machineCount >= 1 && data.machineCount <= 1000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     // 1. Users (Strict PII Isolation)
@@ -284,6 +311,44 @@ service cloud.firestore {
             && isWorkspaceMember(workspaceId)
             && (existing().authorId == request.auth.uid || isWorkspaceOwnerOrAdmin(workspaceId));
         }
+      }
+
+      // 2d. Store Orders (Multi-month Customer Sales & Payroll Basis)
+      match /orders/{orderId} {
+        allow get: if isValidId(workspaceId)
+          && isValidId(orderId)
+          && isWorkspaceMember(workspaceId)
+          && (resource == null || existing().ownerId == request.auth.uid || isWorkspaceOwnerOrAdmin(workspaceId));
+        allow list: if isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(workspaceId)
+          && isValidId(orderId)
+          && isVerifiedUser()
+          && isValidOrder(incoming(), workspaceId, orderId)
+          && isWorkspaceMember(workspaceId)
+          && exists(/databases/$(database)/documents/workspaces/$(workspaceId)/customers/$(incoming().customerId))
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(workspaceId)
+          && isValidId(orderId)
+          && isVerifiedUser()
+          && isValidOrder(incoming(), workspaceId, orderId)
+          && isWorkspaceMember(workspaceId)
+          && (existing().ownerId == request.auth.uid || isWorkspaceOwnerOrAdmin(workspaceId))
+          && exists(/databases/$(database)/documents/workspaces/$(workspaceId)/customers/$(incoming().customerId))
+          && incoming().id == existing().id
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'orderCode', 'customerId', 'customerName', 'customerPhone',
+            'address', 'googleMapsUrl', 'soldAt', 'note', 'machineCount', 'updatedAt'
+          ]);
+        allow delete: if isValidId(workspaceId)
+          && isValidId(orderId)
+          && isWorkspaceMember(workspaceId)
+          && (existing().ownerId == request.auth.uid || isWorkspaceOwnerOrAdmin(workspaceId));
       }
     }
   }

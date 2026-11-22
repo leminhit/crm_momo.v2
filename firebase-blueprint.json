@@ -305,6 +305,95 @@
         }
       },
       "required": ["id", "workspaceId", "customerId", "authorId", "authorName", "type", "content", "createdAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Store sale order belonging to a customer with order code, address/GPS location, sale date, and note.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "customerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "customerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "customerPhone": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "orderCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "googleMapsUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "soldAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "machineCount": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "ownerId",
+        "customerId",
+        "customerName",
+        "customerPhone",
+        "orderCode",
+        "address",
+        "googleMapsUrl",
+        "soldAt",
+        "note",
+        "machineCount",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -327,6 +416,10 @@
     "/workspaces/{workspaceId}/customers/{customerId}/notes/{noteId}": {
       "schema": { "$ref": "#/entities/CustomerNote" },
       "description": "Interaction timeline notes for each customer."
+    },
+    "/workspaces/{workspaceId}/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Store sale orders tied to customers for multi-month sales and payroll calculation."
     }
   }
 }

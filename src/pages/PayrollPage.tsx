@@ -6,10 +6,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Edit3,
-  Plus,
+  ShoppingBag,
   Speaker,
   TrendingUp,
-  Users,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/button';
@@ -35,15 +34,14 @@ interface PayrollPageProps {
 export function PayrollPage({
   onSelectCustomer,
   onEditCustomer,
-  onAddCustomer,
 }: PayrollPageProps) {
-  const { customers, loadingData } = useCrm();
+  const { customers, orders, loadingData } = useCrm();
   const currentMonthKey = getCurrentMonthKey();
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthKey);
 
   const monthGroups = useMemo(
-    () => groupWonCustomersByMonth(customers),
-    [customers]
+    () => groupWonCustomersByMonth(customers, orders),
+    [customers, orders]
   );
 
   const quickMonthKeys = useMemo(() => {
@@ -63,8 +61,8 @@ export function PayrollPage({
   }, [monthGroups]);
 
   const report = useMemo(
-    () => buildMonthlyPayrollReport(customers, selectedMonth),
-    [customers, selectedMonth]
+    () => buildMonthlyPayrollReport(customers, orders, selectedMonth),
+    [customers, orders, selectedMonth]
   );
 
   const handleShiftMonth = (delta: number) => {
@@ -75,23 +73,32 @@ export function PayrollPage({
 
   const { breakdown } = report;
   const totalMachines = breakdown.totalMachines;
-  const tier1Pct = Math.min(100, Math.round((breakdown.tier1Machines / PAYROLL_CONSTANTS.TIER1_LIMIT) * 100));
+  const tier1Pct = Math.min(
+    100,
+    Math.round((breakdown.tier1Machines / PAYROLL_CONSTANTS.TIER1_LIMIT) * 100)
+  );
   const tier2Cap = PAYROLL_CONSTANTS.TIER2_LIMIT - PAYROLL_CONSTANTS.TIER1_LIMIT; // 70
-  const tier2Pct = Math.min(100, Math.round((breakdown.tier2Machines / tier2Cap) * 100));
+  const tier2Pct = Math.min(
+    100,
+    Math.round((breakdown.tier2Machines / tier2Cap) * 100)
+  );
 
   let milestoneHint = '';
   if (totalMachines === 0) {
-    milestoneHint = 'Chưa có loa nào được chốt trong tháng này. Đang tính lương cố định 5.000.000 ₫.';
+    milestoneHint =
+      'Chưa có đơn hàng nào được chốt trong tháng này. Đang tính lương cố định 5.000.000 ₫.';
   } else if (totalMachines < PAYROLL_CONSTANTS.TIER1_LIMIT) {
     const remaining = PAYROLL_CONSTANTS.TIER1_LIMIT - totalMachines;
     milestoneHint = `Đang ở mức 100.000 ₫/loa. Cần thêm ${remaining + 1} loa nữa để bắt đầu hưởng mức 200.000 ₫/loa (từ loa thứ 51).`;
   } else if (totalMachines === PAYROLL_CONSTANTS.TIER1_LIMIT) {
-    milestoneHint = 'Đã chạm đủ 50 loa bậc 1! Từ loa tiếp theo (#51) hoa hồng tăng lên 200.000 ₫/loa.';
+    milestoneHint =
+      'Đã chạm đủ 50 loa bậc 1! Từ loa tiếp theo (#51) hoa hồng tăng lên 200.000 ₫/loa.';
   } else if (totalMachines < PAYROLL_CONSTANTS.TIER2_LIMIT) {
     const remainingTo120 = PAYROLL_CONSTANTS.TIER2_LIMIT - totalMachines;
     milestoneHint = `Đang hưởng mức 200.000 ₫/loa (bậc 2). Còn ${remainingTo120} loa để đạt trần 120 loa.`;
   } else if (totalMachines === PAYROLL_CONSTANTS.TIER2_LIMIT) {
-    milestoneHint = 'Đã đạt tối đa khung hoa hồng 120 loa/tháng (50 loa × 100k + 70 loa × 200k).';
+    milestoneHint =
+      'Đã đạt tối đa khung hoa hồng 120 loa/tháng (50 loa × 100k + 70 loa × 200k).';
   } else {
     milestoneHint = `Tổng tháng đạt ${totalMachines} loa (vượt ${breakdown.beyondCapMachines} loa so với mốc 120 loa). Bảng lương đang tính đủ 50 loa × 100k và 70 loa × 200k.`;
   }
@@ -120,7 +127,7 @@ export function PayrollPage({
               Bảng lương {report.monthLabel}
             </h2>
             <p className="text-xs text-muted-foreground">
-              Lương cố định 5.000.000 ₫ + Hoa hồng theo từng loa đã bán trong tháng
+              Lương cố định 5.000.000 ₫ + Hoa hồng tính theo từng đơn hàng trong tháng
             </p>
           </div>
 
@@ -220,7 +227,7 @@ export function PayrollPage({
             {breakdown.totalMachines}
           </p>
           <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-            {report.customerCount} khách hàng chốt đơn
+            {report.orderCount} đơn hàng · {report.customerCount} khách
           </p>
         </div>
 
@@ -238,7 +245,7 @@ export function PayrollPage({
         </div>
       </section>
 
-      {/* Tier Progress & Detailed Calculation Table */}
+      {/* Tier Progress & Order Breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* Progress & Formula */}
         <section className="lg:col-span-5 rounded-xl border border-border bg-card p-4 sm:p-5 space-y-4">
@@ -322,48 +329,58 @@ export function PayrollPage({
           </div>
         </section>
 
-        {/* Itemized Customers Sold in Selected Month */}
+        {/* Itemized Orders Sold in Selected Month */}
         <section className="lg:col-span-7 rounded-xl border border-border bg-card overflow-hidden flex flex-col">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-5 py-4 border-b border-border">
             <div>
               <h3 className="text-sm font-semibold text-foreground">
-                Chi tiết đơn bán {report.monthLabel}
+                Chi tiết đơn hàng {report.monthLabel}
               </h3>
               <p className="text-xs text-muted-foreground">
-                Chạm vào khách hàng để xem hồ sơ hoặc chỉnh sửa số loa / ngày bán
+                Tính hoa hồng theo từng đơn hàng (cửa hàng) phát sinh trong tháng
               </p>
             </div>
-            <Link
-              to="/customers?status=won"
-              className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline whitespace-nowrap"
-            >
-              Tab Đã bán
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
+            <div className="flex items-center gap-3">
+              <Link
+                to="/orders"
+                className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline whitespace-nowrap"
+              >
+                Mục Đơn hàng
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+              <Link
+                to="/customers?status=won"
+                className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:underline whitespace-nowrap"
+              >
+                Tab Đã bán
+              </Link>
+            </div>
           </div>
 
           {report.hasFallbackDates && (
             <div className="border-b border-border bg-amber-500/10 px-4 sm:px-5 py-2.5 text-xs text-amber-800 dark:text-amber-300">
-              Một số khách cũ chưa có Ngày bán đang tạm tính theo ngày cập nhật. Bấm nút sửa để cập nhật Ngày bán chính xác.
+              Một số khách cũ chưa tách đơn hàng hoặc chưa có Ngày bán đang tạm tính từ hồ sơ khách.
             </div>
           )}
 
           {report.lines.length === 0 ? (
             <div className="p-8 sm:p-10 text-center space-y-3 flex-1 flex flex-col items-center justify-center">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-                <Users className="h-5 w-5" />
+                <ShoppingBag className="h-5 w-5" />
               </div>
               <div>
                 <p className="text-sm font-medium text-foreground">
-                  Chưa có khách Đã bán trong {report.monthLabel}
+                  Chưa có đơn hàng nào trong {report.monthLabel}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground max-w-sm">
-                  Khi thêm khách mới ở trạng thái Đã bán hoặc chuyển trạng thái khách sang Đã bán, số loa sẽ tự cộng vào bảng lương tháng đó.
+                  Vào mục Đơn hàng và bấm Tạo đơn để gắn cửa hàng mới cho khách hàng, hoa hồng sẽ tự động cộng vào tháng tương ứng.
                 </p>
               </div>
-              <Button type="button" size="sm" onClick={onAddCustomer}>
-                <Plus className="h-4 w-4" />
-                Thêm khách đã bán
+              <Button asChild type="button" size="sm" variant="outline">
+                <Link to="/orders">
+                  <span>Mở mục Đơn hàng</span>
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
               </Button>
             </div>
           ) : (
@@ -373,40 +390,65 @@ export function PayrollPage({
                   line.machines === 1
                     ? `#${line.startIndex}`
                     : `#${line.startIndex}–#${line.endIndex}`;
+                const displayName = line.entry.customerName;
+                const detailSub = line.entry.note || line.entry.address;
+
                 return (
                   <div
-                    key={line.customer.id}
+                    key={line.entry.id}
                     className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 hover:bg-muted/35 transition-colors"
                   >
-                    <button
-                      type="button"
-                      onClick={() => onSelectCustomer(line.customer)}
-                      className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
-                    >
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
-                        {getInitials(line.customer.fullName)}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {line.customer.fullName}
-                          {line.customer.company ? (
-                            <span className="font-normal text-muted-foreground">
-                              {' '}· {line.customer.company}
+                    {line.customer ? (
+                      <button
+                        type="button"
+                        onClick={() => onSelectCustomer(line.customer!)}
+                        className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
+                      >
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
+                          {getInitials(displayName)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            <span className="font-mono text-xs text-primary font-semibold">
+                              {line.orderCode}
                             </span>
-                          ) : null}
-                        </p>
-                        <p className="mt-0.5 text-xs text-muted-foreground font-mono tabular-nums truncate">
-                          {formatDateShort(line.saleDate)}
-                          {line.isFallbackDate ? ' (tạm tính)' : ''}
-                          {' · '}
-                          <span className="text-foreground font-medium">
-                            {line.machines} loa
-                          </span>
-                          {' · '}
-                          Loa {rangeLabel}
-                        </p>
+                            <span aria-hidden="true"> · </span>
+                            <span>{displayName}</span>
+                          </p>
+                          <p className="mt-0.5 text-xs text-muted-foreground font-mono tabular-nums truncate">
+                            {formatDateShort(line.saleDate)}
+                            {line.isFallbackDate ? ' (tạm tính)' : ''}
+                            {' · '}
+                            <span className="text-foreground font-medium">
+                              {line.machines} loa
+                            </span>
+                            {' · '}
+                            Loa {rangeLabel}
+                            {detailSub ? (
+                              <span className="font-sans"> · {detailSub}</span>
+                            ) : null}
+                          </p>
+                        </div>
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
+                          {getInitials(displayName)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            <span className="font-mono text-xs text-primary font-semibold">
+                              {line.orderCode}
+                            </span>
+                            <span aria-hidden="true"> · </span>
+                            <span>{displayName}</span>
+                          </p>
+                          <p className="mt-0.5 text-xs text-muted-foreground font-mono tabular-nums truncate">
+                            {formatDateShort(line.saleDate)} · {line.machines} loa · Loa {rangeLabel}
+                          </p>
+                        </div>
                       </div>
-                    </button>
+                    )}
 
                     <div className="flex items-center gap-2 shrink-0">
                       <div className="text-right">
@@ -419,16 +461,18 @@ export function PayrollPage({
                           </p>
                         )}
                       </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => onEditCustomer(line.customer)}
-                        title="Sửa số loa / ngày bán"
-                        aria-label={`Sửa ${line.customer.fullName}`}
-                      >
-                        <Edit3 className="h-3.5 w-3.5" />
-                      </Button>
+                      {line.entry.isLegacyFallback && line.customer && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => onEditCustomer(line.customer!)}
+                          title="Sửa ngày bán / số loa hồ sơ cũ"
+                          aria-label={`Sửa ${displayName}`}
+                        >
+                          <Edit3 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                     </div>
                   </div>
                 );

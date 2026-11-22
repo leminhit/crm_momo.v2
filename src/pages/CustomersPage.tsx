@@ -33,7 +33,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { StatusBadge } from '../components/StatusBadge';
@@ -51,8 +51,6 @@ import {
 import { exportCustomersToExcel } from '../lib/excel';
 import {
   formatDateShort,
-  getCustomerMachineCount,
-  getCustomerSaleDate,
   groupWonCustomersByMonth,
 } from '../lib/payroll';
 import {
@@ -95,7 +93,7 @@ export function CustomersPage({
   onEditCustomer,
   onSelectCustomer,
 }: CustomersPageProps) {
-  const { user, workspace, customers, loadingData } = useCrm();
+  const { user, workspace, customers, orders, loadingData } = useCrm();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -166,23 +164,58 @@ export function CustomersPage({
     }
   };
 
-  const pushCount = useMemo(
-    () => customers.filter((c) => c.status !== 'won' && c.status !== 'lost').length,
-    [customers]
-  );
-  const wonCount = useMemo(
-    () => customers.filter((c) => c.status === 'won').length,
-    [customers]
-  );
-  const lostCount = useMemo(
-    () => customers.filter((c) => c.status === 'lost').length,
-    [customers]
+  const wonMonthGroupsAll = useMemo(
+    () => groupWonCustomersByMonth(customers, orders),
+    [customers, orders]
   );
 
-  const wonMonthGroupsAll = useMemo(
-    () => groupWonCustomersByMonth(customers),
-    [customers]
+  const customerWonMonthsMap = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const group of wonMonthGroupsAll) {
+      for (const entry of group.entries) {
+        let months = map.get(entry.customer.id);
+        if (!months) {
+          months = new Set<string>();
+          map.set(entry.customer.id, months);
+        }
+        months.add(group.monthKey);
+      }
+    }
+    return map;
+  }, [wonMonthGroupsAll]);
+
+  const ordersByCustomerId = useMemo(() => {
+    const map = new Map<string, typeof orders>();
+    for (const order of orders) {
+      const list = map.get(order.customerId);
+      if (list) {
+        list.push(order);
+      } else {
+        map.set(order.customerId, [order]);
+      }
+    }
+    return map;
+  }, [orders]);
+
+  const pushCount = useMemo(
+    () =>
+      customers.filter(
+        (c) =>
+          c.status !== 'won' &&
+          c.status !== 'lost' &&
+          !customerWonMonthsMap.has(c.id)
+      ).length,
+    [customers, customerWonMonthsMap]
   );
+  const wonCount = customerWonMonthsMap.size;
+  const lostCount = useMemo(
+    () =>
+      customers.filter(
+        (c) => c.status === 'lost' && !customerWonMonthsMap.has(c.id)
+      ).length,
+    [customers, customerWonMonthsMap]
+  );
+
   const totalWonMachinesAll = useMemo(
     () => wonMonthGroupsAll.reduce((sum, g) => sum + g.totalMachines, 0),
     [wonMonthGroupsAll]
@@ -192,17 +225,17 @@ export function CustomersPage({
     const q = searchQuery.trim().toLowerCase();
     return customers.filter((c) => {
       if (saleTab === 'won') {
-        if (c.status !== 'won') return false;
-        if (
-          selectedWonMonth !== 'all' &&
-          getCustomerSaleDate(c).monthKey !== selectedWonMonth
-        ) {
+        const months = customerWonMonthsMap.get(c.id);
+        if (!months || months.size === 0) return false;
+        if (selectedWonMonth !== 'all' && !months.has(selectedWonMonth)) {
           return false;
         }
       } else if (saleTab === 'lost') {
-        if (c.status !== 'lost') return false;
+        if (c.status !== 'lost' || customerWonMonthsMap.has(c.id)) return false;
       } else {
-        if (c.status === 'won' || c.status === 'lost') return false;
+        if (c.status === 'won' || c.status === 'lost' || customerWonMonthsMap.has(c.id)) {
+          return false;
+        }
         if (statusFilter !== 'all' && c.status !== statusFilter) return false;
       }
 
@@ -215,6 +248,12 @@ export function CustomersPage({
         p.number.toLowerCase().includes(q)
       );
       const tagMatch = c.tags.some((t) => t.toLowerCase().includes(q));
+      const orderMatch = (ordersByCustomerId.get(c.id) ?? []).some(
+        (o) =>
+          o.orderCode.toLowerCase().includes(q) ||
+          o.address.toLowerCase().includes(q) ||
+          o.note.toLowerCase().includes(q)
+      );
       return (
         c.fullName.toLowerCase().includes(q) ||
         c.company.toLowerCase().includes(q) ||
@@ -222,11 +261,14 @@ export function CustomersPage({
         c.email.toLowerCase().includes(q) ||
         c.quickNote.toLowerCase().includes(q) ||
         phoneMatch ||
-        tagMatch
+        tagMatch ||
+        orderMatch
       );
     });
   }, [
     customers,
+    customerWonMonthsMap,
+    ordersByCustomerId,
     saleTab,
     selectedWonMonth,
     searchQuery,
@@ -237,8 +279,15 @@ export function CustomersPage({
 
   const filteredWonGroups = useMemo(() => {
     if (saleTab !== 'won') return [];
-    return groupWonCustomersByMonth(filteredCustomers);
-  }, [saleTab, filteredCustomers]);
+    const groups = groupWonCustomersByMonth(filteredCustomers, orders);
+    if (selectedWonMonth === 'all') return groups;
+    return groups.filter((g) => g.monthKey === selectedWonMonth);
+  }, [saleTab, filteredCustomers, orders, selectedWonMonth]);
+
+  const filteredWonOrdersCount = useMemo(
+    () => filteredWonGroups.reduce((sum, g) => sum + g.orderCount, 0),
+    [filteredWonGroups]
+  );
 
   const filteredWonMachinesCount = useMemo(
     () => filteredWonGroups.reduce((sum, g) => sum + g.totalMachines, 0),
@@ -768,15 +817,18 @@ export function CustomersPage({
             <span className="tabular-nums">
               Hiển thị <strong className="text-foreground">{filteredCustomers.length}</strong> / {tabTotal}{' '}
               {saleTab === 'won'
-                ? `khách đã bán (${filteredWonMachinesCount} loa)`
+                ? `khách đã bán (${filteredWonOrdersCount} đơn · ${filteredWonMachinesCount} loa)`
                 : saleTab === 'lost'
                   ? 'khách ngưng theo dõi'
                   : 'khách cần push sale'}
             </span>
-            {saleTab === 'won' && filteredCustomers.length > 0 && (
-              <span className="hidden sm:inline text-muted-foreground">
-                · Chạm Zalo hoặc Gọi để nhắn tin hỏi thăm sau bán
-              </span>
+            {saleTab === 'won' && (
+              <Link
+                to="/orders"
+                className="text-primary hover:underline font-medium"
+              >
+                Xem mục Đơn hàng →
+              </Link>
             )}
             {saleTab === 'lost' && filteredCustomers.length > 0 && (
               <span className="hidden sm:inline text-muted-foreground">
@@ -925,7 +977,7 @@ export function CustomersPage({
                     {group.label}
                   </h2>
                   <p className="text-xs font-mono tabular-nums text-muted-foreground">
-                    {group.customerCount} khách ·{' '}
+                    {group.customerCount} khách · {group.orderCount} đơn ·{' '}
                     <span className="font-semibold text-emerald-700 dark:text-emerald-400">
                       {group.totalMachines} loa
                     </span>
@@ -940,17 +992,23 @@ export function CustomersPage({
                       : 'grid grid-cols-1 gap-3 md:hidden'
                   }
                 >
-                  {group.customers.map((c) => {
+                  {group.entries.map((entry) => {
+                    const c = entry.customer;
                     const primary = c.phones.find((p) => p.isPrimary) ?? c.phones[0];
                     const dial = primary ? normalizePhoneForDial(primary.number) : '';
                     const zalo = primary ? getZaloUrl(primary.number) : '';
-                    const mapsHref = getMapsHref(c.googleMapsUrl, c.address);
-                    const machines = getCustomerMachineCount(c);
-                    const saleInfo = getCustomerSaleDate(c);
+                    const monthPrimaryOrder = entry.monthOrders[0];
+                    const displayAddress = monthPrimaryOrder?.address || c.address;
+                    const displayMapsUrl =
+                      monthPrimaryOrder?.googleMapsUrl || c.googleMapsUrl;
+                    const mapsHref = getMapsHref(displayMapsUrl, displayAddress);
+                    const realOrderCodes = entry.monthOrders
+                      .filter((o) => !o.isLegacyFallback)
+                      .map((o) => o.orderCode);
 
                     return (
                       <article
-                        key={c.id}
+                        key={`${group.monthKey}-${c.id}`}
                         className="min-w-0 rounded-xl border border-border bg-card p-3.5 sm:p-4 flex flex-col justify-between gap-3 hover:border-primary/40 transition-colors"
                       >
                         <div className="flex items-start justify-between gap-2.5">
@@ -973,12 +1031,12 @@ export function CustomersPage({
                               )}
                               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-mono tabular-nums text-muted-foreground">
                                 <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-                                  {machines} loa
+                                  {entry.ordersCount} đơn · {entry.machinesInMonth} loa
                                 </span>
                                 <span aria-hidden="true">·</span>
                                 <span>
-                                  {formatDateShort(saleInfo.dateStr)}
-                                  {saleInfo.isFallback ? ' (tạm tính)' : ''}
+                                  {formatDateShort(entry.latestSaleDate)}
+                                  {entry.isFallbackDate ? ' (tạm tính)' : ''}
                                 </span>
                               </div>
                             </div>
@@ -1007,10 +1065,15 @@ export function CustomersPage({
                               </span>
                             )}
                           </p>
-                          {c.address && <p className="truncate">{c.address}</p>}
-                          {c.quickNote && (
+                          {realOrderCodes.length > 0 && (
+                            <p className="font-mono tabular-nums text-[11px] text-foreground/80 truncate">
+                              Mã đơn: {realOrderCodes.join(', ')}
+                            </p>
+                          )}
+                          {displayAddress && <p className="truncate">{displayAddress}</p>}
+                          {(monthPrimaryOrder?.note || c.quickNote) && (
                             <p className="line-clamp-2 text-muted-foreground/90">
-                              {c.quickNote}
+                              {monthPrimaryOrder?.note || c.quickNote}
                             </p>
                           )}
                         </div>
@@ -1093,25 +1156,31 @@ export function CustomersPage({
                             </th>
                             <th className="px-4 py-3 whitespace-nowrap">Khách hàng</th>
                             <th className="px-4 py-3 whitespace-nowrap">Số điện thoại &amp; Zalo</th>
-                            <th className="px-4 py-3 whitespace-nowrap text-right">Số loa</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Ngày bán</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Vị trí</th>
+                            <th className="px-4 py-3 whitespace-nowrap text-right">Đơn trong tháng</th>
+                            <th className="px-4 py-3 whitespace-nowrap">Ngày bán gần nhất</th>
+                            <th className="px-4 py-3 whitespace-nowrap">Vị trí cửa hàng</th>
                             <th className="px-4 py-3 whitespace-nowrap text-right">Thao tác</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                          {group.customers.map((c) => {
+                          {group.entries.map((entry) => {
+                            const c = entry.customer;
                             const primary = c.phones.find((p) => p.isPrimary) ?? c.phones[0];
                             const extra = c.phones.length - 1;
                             const dial = primary ? normalizePhoneForDial(primary.number) : '';
                             const zalo = primary ? getZaloUrl(primary.number) : '';
-                            const mapsHref = getMapsHref(c.googleMapsUrl, c.address);
-                            const machines = getCustomerMachineCount(c);
-                            const saleInfo = getCustomerSaleDate(c);
+                            const monthPrimaryOrder = entry.monthOrders[0];
+                            const displayAddress = monthPrimaryOrder?.address || c.address;
+                            const displayMapsUrl =
+                              monthPrimaryOrder?.googleMapsUrl || c.googleMapsUrl;
+                            const mapsHref = getMapsHref(displayMapsUrl, displayAddress);
+                            const realOrderCodes = entry.monthOrders
+                              .filter((o) => !o.isLegacyFallback)
+                              .map((o) => o.orderCode);
 
                             return (
                               <tr
-                                key={c.id}
+                                key={`${group.monthKey}-${c.id}`}
                                 className="hover:bg-muted/35 transition-colors"
                               >
                                 <td className="px-4 py-3 align-middle">
@@ -1189,12 +1258,19 @@ export function CustomersPage({
                                     </div>
                                   </div>
                                 </td>
-                                <td className="px-4 py-3 align-middle text-right font-mono text-xs font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
-                                  {machines} loa
+                                <td className="px-4 py-3 align-middle text-right">
+                                  <p className="font-mono text-xs font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                                    {entry.ordersCount} đơn · {entry.machinesInMonth} loa
+                                  </p>
+                                  {realOrderCodes.length > 0 && (
+                                    <p className="font-mono text-[11px] tabular-nums text-muted-foreground truncate max-w-[170px] ml-auto">
+                                      {realOrderCodes.join(', ')}
+                                    </p>
+                                  )}
                                 </td>
                                 <td className="px-4 py-3 align-middle font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap">
-                                  {formatDateShort(saleInfo.dateStr)}
-                                  {saleInfo.isFallback ? ' (tạm)' : ''}
+                                  {formatDateShort(entry.latestSaleDate)}
+                                  {entry.isFallbackDate ? ' (tạm)' : ''}
                                 </td>
                                 <td className="px-4 py-3 align-middle">
                                   {mapsHref ? (
@@ -1203,14 +1279,14 @@ export function CustomersPage({
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="inline-flex items-center gap-1 text-xs text-primary hover:underline max-w-[200px] truncate"
-                                      title={c.address || c.googleMapsUrl}
+                                      title={displayAddress || displayMapsUrl}
                                     >
                                       <MapPin className="h-3.5 w-3.5 shrink-0" />
-                                      <span className="truncate">{c.address || 'Mở Google Maps'}</span>
+                                      <span className="truncate">{displayAddress || 'Mở Google Maps'}</span>
                                     </a>
                                   ) : (
                                     <span className="text-xs text-muted-foreground truncate">
-                                      {c.address || '—'}
+                                      {displayAddress || '—'}
                                     </span>
                                   )}
                                 </td>
@@ -1220,7 +1296,7 @@ export function CustomersPage({
                                     variant="ghost"
                                     size="icon-sm"
                                     onClick={() => onEditCustomer(c)}
-                                    title="Chỉnh sửa số loa / ngày bán"
+                                    title="Chỉnh sửa thông tin khách"
                                     aria-label={`Sửa ${c.fullName}`}
                                   >
                                     <Edit3 className="h-3.5 w-3.5" />

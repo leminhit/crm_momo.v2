@@ -71,6 +71,40 @@ export interface CustomerFirestoreDoc {
   updatedAt: Timestamp;
 }
 
+export interface OrderRecord {
+  id: string;
+  workspaceId: string;
+  ownerId: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  orderCode: string;
+  address: string;
+  googleMapsUrl: string;
+  soldAt: string;
+  note: string;
+  machineCount: number;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+export interface OrderFirestoreDoc {
+  id: string;
+  workspaceId: string;
+  ownerId: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  orderCode: string;
+  address: string;
+  googleMapsUrl: string;
+  soldAt: string;
+  note: string;
+  machineCount: number;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
 export interface CustomerNoteRecord {
   id: string;
   workspaceId: string;

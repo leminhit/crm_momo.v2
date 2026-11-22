@@ -21,7 +21,7 @@ import { useCrm } from '../contexts/CrmContext';
 import {
   buildMonthlyPayrollReport,
   getCurrentMonthKey,
-  getCustomerMachineCount,
+  getUnifiedSaleEntries,
 } from '../lib/payroll';
 import {
   formatCurrencyVnd,
@@ -54,13 +54,12 @@ export function DashboardPage({
   onAddCustomer,
   onSelectCustomer,
 }: DashboardPageProps) {
-  const { customers, loadingData, workspace } = useCrm();
+  const { customers, orders, loadingData, workspace } = useCrm();
 
   const stats = useMemo(() => {
     const todayStart = startOfDay(new Date());
     let activePipelineValue = 0;
     let wonValue = 0;
-    let wonMachinesTotal = 0;
     let dueCount = 0;
     let starredCount = 0;
 
@@ -81,7 +80,6 @@ export function DashboardPage({
 
       if (c.status === 'won') {
         wonValue += c.estimatedValue || 0;
-        wonMachinesTotal += getCustomerMachineCount(c);
       } else if (c.status !== 'lost') {
         activePipelineValue += c.estimatedValue || 0;
       }
@@ -104,13 +102,21 @@ export function DashboardPage({
       a.customer.nextFollowUpAt.localeCompare(b.customer.nextFollowUpAt)
     );
 
-    const currentPayroll = buildMonthlyPayrollReport(customers, getCurrentMonthKey());
+    const unifiedSales = getUnifiedSaleEntries(customers, orders);
+    const wonMachinesTotal = unifiedSales.reduce((sum, s) => sum + s.machines, 0);
+    const wonOrdersTotal = orders.length;
+    const currentPayroll = buildMonthlyPayrollReport(
+      customers,
+      orders,
+      getCurrentMonthKey()
+    );
 
     return {
       total: customers.length,
       activePipelineValue,
       wonValue,
       wonMachinesTotal,
+      wonOrdersTotal,
       dueCount,
       starredCount,
       statusCounts,
@@ -118,7 +124,7 @@ export function DashboardPage({
       dueList: dueList.slice(0, 6),
       recentCustomers: customers.slice(0, 6),
     };
-  }, [customers]);
+  }, [customers, orders]);
 
   if (loadingData) {
     return (
@@ -245,7 +251,7 @@ export function DashboardPage({
               <strong className="text-foreground font-mono">
                 {stats.currentPayroll.breakdown.totalMachines} loa
               </strong>{' '}
-              ({stats.currentPayroll.customerCount} khách hàng)
+              ({stats.currentPayroll.orderCount} đơn hàng · {stats.currentPayroll.customerCount} khách hàng)
             </p>
           </div>
 

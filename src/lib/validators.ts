@@ -21,6 +21,8 @@ export const CRM_LIMITS = {
   NEXT_FOLLOWUP_MAX: 32,
   SOLD_AT_MAX: 32,
   MACHINE_COUNT_MAX: 1000,
+  ORDER_CODE_MAX: 60,
+  ORDER_NOTE_MAX: 1000,
   NOTE_CONTENT_MAX: 3000,
   WORKSPACE_NAME_MAX: 100,
 } as const;
@@ -130,6 +132,44 @@ export const customerNoteSchema = z.object({
 });
 
 export type CustomerNoteFormValues = z.infer<typeof customerNoteSchema>;
+
+export const orderFormSchema = z.object({
+  customerId: z
+    .string()
+    .trim()
+    .min(1, 'Vui lòng chọn khách hàng cho đơn hàng'),
+  orderCode: z
+    .string()
+    .trim()
+    .min(1, 'Vui lòng nhập mã đơn')
+    .max(CRM_LIMITS.ORDER_CODE_MAX, `Mã đơn tối đa ${CRM_LIMITS.ORDER_CODE_MAX} ký tự`),
+  soldAt: z
+    .string()
+    .trim()
+    .min(1, 'Vui lòng chọn ngày bán')
+    .max(CRM_LIMITS.SOLD_AT_MAX),
+  address: z
+    .string()
+    .trim()
+    .max(CRM_LIMITS.ADDRESS_MAX, `Tối đa ${CRM_LIMITS.ADDRESS_MAX} ký tự`)
+    .default(''),
+  googleMapsUrl: z
+    .string()
+    .trim()
+    .max(CRM_LIMITS.MAPS_URL_MAX, `Tối đa ${CRM_LIMITS.MAPS_URL_MAX} ký tự`)
+    .refine(
+      (val) => val === '' || /^https?:\/\/.+/i.test(val),
+      'Link Google Maps phải bắt đầu bằng http:// hoặc https://'
+    )
+    .default(''),
+  note: z
+    .string()
+    .trim()
+    .max(CRM_LIMITS.ORDER_NOTE_MAX, `Tối đa ${CRM_LIMITS.ORDER_NOTE_MAX} ký tự`)
+    .default(''),
+});
+
+export type OrderFormValues = z.infer<typeof orderFormSchema>;
 
 export function parseTagsString(raw: string): string[] {
   return raw

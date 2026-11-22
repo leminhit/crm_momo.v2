@@ -12,6 +12,7 @@ import {
   MessageCircle,
   Phone,
   Plus,
+  ShoppingBag,
   Star,
   Trash2,
 } from 'lucide-react';
@@ -70,7 +71,7 @@ export function CustomerDetailDrawer({
   onOpenChange,
   onEdit,
 }: CustomerDetailDrawerProps) {
-  const { user, profile, workspace } = useCrm();
+  const { user, profile, workspace, orders } = useCrm();
   const [notes, setNotes] = useState<CustomerNoteRecord[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [noteType, setNoteType] = useState<NoteInteractionType>('note');
@@ -114,6 +115,10 @@ export function CustomerDetailDrawer({
   }, [open, customer, user, workspace]);
 
   if (!customer) return null;
+
+  const customerOrders = orders
+    .filter((o) => o.customerId === customer.id)
+    .sort((a, b) => b.soldAt.localeCompare(a.soldAt));
 
   const primaryPhone =
     customer.phones.find((p) => p.isPrimary) ?? customer.phones[0];
@@ -334,16 +339,24 @@ export function CustomerDetailDrawer({
             </div>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground pt-1 border-t border-border">
-              {customer.status === 'won' && (() => {
-                const saleInfo = getCustomerSaleDate(customer);
-                const machines = getCustomerMachineCount(customer);
-                return (
-                  <span className="font-medium text-emerald-700 dark:text-emerald-300 tabular-nums">
-                    {machines} loa · Ngày bán: {formatDateShort(saleInfo.dateStr)}
-                    {saleInfo.isFallback ? ' (tạm tính)' : ''}
-                  </span>
-                );
-              })()}
+              {customerOrders.length > 0 ? (
+                <span className="font-medium text-emerald-700 dark:text-emerald-300 tabular-nums">
+                  {customerOrders.length} đơn hàng ·{' '}
+                  {customerOrders.reduce((s, o) => s + (o.machineCount || 1), 0)} loa
+                </span>
+              ) : (
+                customer.status === 'won' &&
+                (() => {
+                  const saleInfo = getCustomerSaleDate(customer);
+                  const machines = getCustomerMachineCount(customer);
+                  return (
+                    <span className="font-medium text-emerald-700 dark:text-emerald-300 tabular-nums">
+                      {machines} loa · Ngày bán: {formatDateShort(saleInfo.dateStr)}
+                      {saleInfo.isFallback ? ' (tạm tính)' : ''}
+                    </span>
+                  );
+                })()
+              )}
               {customer.source && <span>Nguồn: {customer.source}</span>}
               {customer.nextFollowUpAt && (
                 <span className="inline-flex items-center gap-1 text-foreground font-medium">
@@ -356,6 +369,61 @@ export function CustomerDetailDrawer({
               )}
             </div>
           </div>
+
+          {/* Store Orders History for this Customer */}
+          {customerOrders.length > 0 && (
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground inline-flex items-center gap-1.5">
+                  <ShoppingBag className="h-3.5 w-3.5" />
+                  Đơn hàng / Cửa hàng ({customerOrders.length})
+                </h3>
+              </div>
+              <div className="divide-y divide-border rounded-xl border border-border bg-card">
+                {customerOrders.map((ord) => {
+                  const ordMaps = getMapsHref(ord.googleMapsUrl, ord.address);
+                  return (
+                    <div key={ord.id} className="p-3.5 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="font-mono font-semibold text-primary tabular-nums">
+                          {ord.orderCode}
+                        </span>
+                        <span className="font-mono tabular-nums text-muted-foreground">
+                          {formatDateShort(ord.soldAt)} ·{' '}
+                          <span className="text-emerald-700 dark:text-emerald-400 font-medium">
+                            {ord.machineCount || 1} loa
+                          </span>
+                        </span>
+                      </div>
+                      {(ord.address || ordMaps) && (
+                        <div className="flex items-start justify-between gap-2 text-xs">
+                          <span className="text-muted-foreground break-words">
+                            {ord.address || 'Đã gắn định vị GPS'}
+                          </span>
+                          {ordMaps && (
+                            <a
+                              href={ordMaps}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 font-medium text-primary hover:underline shrink-0"
+                            >
+                              <span>Maps</span>
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          )}
+                        </div>
+                      )}
+                      {ord.note && (
+                        <p className="text-xs text-foreground/90 whitespace-pre-wrap leading-relaxed">
+                          {ord.note}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* All Phone Numbers */}
           <div className="space-y-2.5">
