@@ -19,6 +19,8 @@ export const CRM_LIMITS = {
   TAGS_MAX_ITEMS: 10,
   QUICK_NOTE_MAX: 2000,
   NEXT_FOLLOWUP_MAX: 32,
+  SOLD_AT_MAX: 32,
+  MACHINE_COUNT_MAX: 1000,
   NOTE_CONTENT_MAX: 3000,
   WORKSPACE_NAME_MAX: 100,
 } as const;
@@ -103,6 +105,17 @@ export const customerFormSchema = z.object({
     .min(0, 'Giá trị dự kiến không thể âm')
     .default(0),
   isStarred: z.boolean().default(false),
+  soldAt: z
+    .string()
+    .trim()
+    .max(CRM_LIMITS.SOLD_AT_MAX)
+    .default(''),
+  machineCount: z.coerce
+    .number()
+    .int('Số lượng loa phải là số nguyên')
+    .min(0, 'Số lượng loa không thể âm')
+    .max(CRM_LIMITS.MACHINE_COUNT_MAX, `Tối đa ${CRM_LIMITS.MACHINE_COUNT_MAX} loa`)
+    .default(1),
 });
 
 export type CustomerFormValues = z.infer<typeof customerFormSchema>;

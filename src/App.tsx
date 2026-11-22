@@ -1,36 +1,46 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AppShell } from './components/AppShell';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { LoginView } from './components/LoginView';
 import { Skeleton } from './components/ui/skeleton';
 import { CrmProvider, useCrm } from './contexts/CrmContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 
+const LoginView = lazy(() =>
+  import('./components/LoginView').then((m) => ({ default: m.LoginView }))
+);
+
+function AuthSkeleton() {
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-6">
+      <div className="w-full max-w-sm space-y-3">
+        <Skeleton className="h-10 w-40 mx-auto" />
+        <Skeleton className="h-4 w-56 mx-auto" />
+        <Skeleton className="h-32 w-full rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
 function RootRouter() {
-  const { user, loadingAuth } = useCrm();
+  const { isAuthenticated, loadingAuth } = useCrm();
   const { theme } = useTheme();
 
   if (loadingAuth) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-6">
-        <div className="w-full max-w-sm space-y-3">
-          <Skeleton className="h-10 w-40 mx-auto" />
-          <Skeleton className="h-4 w-56 mx-auto" />
-          <Skeleton className="h-32 w-full rounded-xl" />
-        </div>
-      </div>
-    );
+    return <AuthSkeleton />;
   }
 
   return (
     <>
-      {user ? (
+      {isAuthenticated ? (
         <BrowserRouter>
           <AppShell />
         </BrowserRouter>
       ) : (
-        <LoginView />
+        <Suspense fallback={<AuthSkeleton />}>
+          <LoginView />
+        </Suspense>
       )}
       <Toaster
         position="top-right"

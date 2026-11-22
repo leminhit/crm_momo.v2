@@ -14,6 +14,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase';
+import { getTodayDateString } from './payroll';
 import { generateFirestoreId } from './utils';
 import { CRM_LIMITS } from './validators';
 import type {
@@ -67,6 +68,11 @@ export function mapCustomerDoc(id: string, data: Record<string, unknown>): Custo
     nextFollowUpAt: String(data.nextFollowUpAt ?? ''),
     estimatedValue: typeof data.estimatedValue === 'number' ? data.estimatedValue : 0,
     isStarred: Boolean(data.isStarred),
+    soldAt: typeof data.soldAt === 'string' ? data.soldAt : '',
+    machineCount:
+      typeof data.machineCount === 'number' && Number.isFinite(data.machineCount)
+        ? Math.max(0, Math.floor(data.machineCount))
+        : 1,
     createdAt: toDateOrNull(data.createdAt),
     updatedAt: toDateOrNull(data.updatedAt),
   };
@@ -96,43 +102,56 @@ export async function ensureUserWorkspace(user: User): Promise<{
   const uid = user.uid;
   const defaultWsId = `personal_${uid}`;
   const userRef = doc(db, 'users', uid);
+  const defaultWsRef = doc(db, 'workspaces', defaultWsId);
+  const defaultMemberRef = doc(db, 'workspaces', defaultWsId, 'members', uid);
 
   let existingUserSnap;
+  let defaultWsSnap;
+  let defaultMemberSnap;
   try {
-    existingUserSnap = await getDoc(userRef);
+    [existingUserSnap, defaultWsSnap, defaultMemberSnap] = await Promise.all([
+      getDoc(userRef),
+      getDoc(defaultWsRef),
+      getDoc(defaultMemberRef),
+    ]);
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, `users/${uid}`);
   }
 
   let workspaceId = defaultWsId;
+  let wsSnap = defaultWsSnap;
+  let memberSnap = defaultMemberSnap;
+
   if (existingUserSnap.exists()) {
     const uData = existingUserSnap.data();
-    if (typeof uData.defaultWorkspaceId === 'string' && uData.defaultWorkspaceId) {
+    if (
+      typeof uData.defaultWorkspaceId === 'string' &&
+      uData.defaultWorkspaceId &&
+      uData.defaultWorkspaceId !== defaultWsId
+    ) {
       workspaceId = uData.defaultWorkspaceId;
+      try {
+        [wsSnap, memberSnap] = await Promise.all([
+          getDoc(doc(db, 'workspaces', workspaceId)),
+          getDoc(doc(db, 'workspaces', workspaceId, 'members', uid)),
+        ]);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, `workspaces/${workspaceId}`);
+      }
     }
   }
 
   const wsRef = doc(db, 'workspaces', workspaceId);
   const memberRef = doc(db, 'workspaces', workspaceId, 'members', uid);
-
-  let wsSnap;
-  try {
-    wsSnap = await getDoc(wsRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, `workspaces/${workspaceId}`);
-  }
-
-  let memberSnap;
-  try {
-    memberSnap = await getDoc(memberRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, `workspaces/${workspaceId}/members/${uid}`);
-  }
-
-  const safeName = (user.displayName || user.email?.split('@')[0] || 'Người dùng CRM').slice(0, 120);
+  const safeName = (
+    user.displayName ||
+    user.email?.split('@')[0] ||
+    'Người dùng CRM'
+  ).slice(0, 120);
   const safeEmail = (user.email || '').slice(0, 160);
 
-  if (!wsSnap.exists() || !memberSnap.exists() || !existingUserSnap.exists()) {
+  const needsCreate = !wsSnap.exists() || !memberSnap.exists() || !existingUserSnap.exists();
+  if (needsCreate) {
     const batch = writeBatch(db);
 
     if (!wsSnap.exists()) {
@@ -177,22 +196,50 @@ export async function ensureUserWorkspace(user: User): Promise<{
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `workspaces/${workspaceId}`);
     }
+
+    const [finalUserSnap, finalWsSnap] = await Promise.all([
+      getDoc(userRef),
+      getDoc(wsRef),
+    ]);
+    const uData = finalUserSnap.data() ?? {};
+    const wData = finalWsSnap.data() ?? {};
+
+    return {
+      profile: {
+        uid,
+        displayName: String(uData.displayName ?? safeName),
+        email: String(uData.email ?? safeEmail),
+        photoURL:
+          typeof uData.photoURL === 'string'
+            ? uData.photoURL
+            : user.photoURL ?? undefined,
+        defaultWorkspaceId: String(uData.defaultWorkspaceId ?? workspaceId),
+        createdAt: toDateOrNull(uData.createdAt),
+        updatedAt: toDateOrNull(uData.updatedAt),
+      },
+      workspace: {
+        id: workspaceId,
+        name: String(wData.name ?? 'CRM Cá Nhân'),
+        ownerId: String(wData.ownerId ?? uid),
+        mode: wData.mode === 'team' ? 'team' : 'personal',
+        createdAt: toDateOrNull(wData.createdAt),
+        updatedAt: toDateOrNull(wData.updatedAt),
+      },
+    };
   }
 
-  const [finalUserSnap, finalWsSnap] = await Promise.all([
-    getDoc(userRef),
-    getDoc(wsRef),
-  ]);
-
-  const uData = finalUserSnap.data() ?? {};
-  const wData = finalWsSnap.data() ?? {};
+  const uData = existingUserSnap.data() ?? {};
+  const wData = wsSnap.data() ?? {};
 
   return {
     profile: {
       uid,
       displayName: String(uData.displayName ?? safeName),
       email: String(uData.email ?? safeEmail),
-      photoURL: typeof uData.photoURL === 'string' ? uData.photoURL : user.photoURL ?? undefined,
+      photoURL:
+        typeof uData.photoURL === 'string'
+          ? uData.photoURL
+          : user.photoURL ?? undefined,
       defaultWorkspaceId: String(uData.defaultWorkspaceId ?? workspaceId),
       createdAt: toDateOrNull(uData.createdAt),
       updatedAt: toDateOrNull(uData.updatedAt),
@@ -241,6 +288,8 @@ export interface CustomerInputPayload {
   nextFollowUpAt: string;
   estimatedValue: number;
   isStarred: boolean;
+  soldAt?: string;
+  machineCount?: number;
 }
 
 function sanitizePhones(phones: PhoneEntry[]): PhoneEntry[] {
@@ -269,6 +318,16 @@ function sanitizePhones(phones: PhoneEntry[]): PhoneEntry[] {
 }
 
 function sanitizeCustomerFields(input: CustomerInputPayload) {
+  const cleanSoldAt = (input.soldAt ?? '').trim().slice(0, CRM_LIMITS.SOLD_AT_MAX);
+  const resolvedSoldAt =
+    input.status === 'won' ? cleanSoldAt || getTodayDateString() : cleanSoldAt;
+  const rawMachineCount =
+    typeof input.machineCount === 'number' && Number.isFinite(input.machineCount)
+      ? Math.min(CRM_LIMITS.MACHINE_COUNT_MAX, Math.max(0, Math.floor(input.machineCount)))
+      : 1;
+  const resolvedMachineCount =
+    input.status === 'won' ? Math.max(1, rawMachineCount) : rawMachineCount;
+
   return {
     fullName: input.fullName.trim().slice(0, CRM_LIMITS.FULL_NAME_MAX),
     company: input.company.trim().slice(0, CRM_LIMITS.COMPANY_MAX),
@@ -288,6 +347,8 @@ function sanitizeCustomerFields(input: CustomerInputPayload) {
     nextFollowUpAt: input.nextFollowUpAt.trim().slice(0, CRM_LIMITS.NEXT_FOLLOWUP_MAX),
     estimatedValue: Math.max(0, Number(input.estimatedValue) || 0),
     isStarred: Boolean(input.isStarred),
+    soldAt: resolvedSoldAt,
+    machineCount: resolvedMachineCount,
   };
 }
 
@@ -342,14 +403,25 @@ export async function updateCustomer(
 export async function updateCustomerStatus(
   workspaceId: string,
   customerId: string,
-  status: CustomerStatus
+  status: CustomerStatus,
+  existingCustomer?: Pick<CustomerRecord, 'soldAt' | 'machineCount'>
 ): Promise<void> {
   const path = `workspaces/${workspaceId}/customers/${customerId}`;
+  const updatePayload: Record<string, unknown> = {
+    status,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (status === 'won') {
+    updatePayload.soldAt = existingCustomer?.soldAt?.trim() || getTodayDateString();
+    updatePayload.machineCount =
+      existingCustomer && existingCustomer.machineCount >= 1
+        ? Math.min(CRM_LIMITS.MACHINE_COUNT_MAX, Math.floor(existingCustomer.machineCount))
+        : 1;
+  }
+
   try {
-    await updateDoc(doc(db, 'workspaces', workspaceId, 'customers', customerId), {
-      status,
-      updatedAt: serverTimestamp(),
-    });
+    await updateDoc(doc(db, 'workspaces', workspaceId, 'customers', customerId), updatePayload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -426,17 +498,29 @@ export async function bulkDeleteCustomers(
 export async function bulkUpdateCustomerStatus(
   workspaceId: string,
   customerIds: string[],
-  status: CustomerStatus
+  status: CustomerStatus,
+  existingCustomers?: CustomerRecord[]
 ): Promise<void> {
+  const existingMap = new Map(existingCustomers?.map((c) => [c.id, c]) ?? []);
+  const today = getTodayDateString();
   const chunkSize = 400;
   for (let i = 0; i < customerIds.length; i += chunkSize) {
     const slice = customerIds.slice(i, i + chunkSize);
     const batch = writeBatch(db);
     for (const id of slice) {
-      batch.update(doc(db, 'workspaces', workspaceId, 'customers', id), {
+      const updatePayload: Record<string, unknown> = {
         status,
         updatedAt: serverTimestamp(),
-      });
+      };
+      if (status === 'won') {
+        const existing = existingMap.get(id);
+        updatePayload.soldAt = existing?.soldAt?.trim() || today;
+        updatePayload.machineCount =
+          existing && existing.machineCount >= 1
+            ? Math.min(CRM_LIMITS.MACHINE_COUNT_MAX, Math.floor(existing.machineCount))
+            : 1;
+      }
+      batch.update(doc(db, 'workspaces', workspaceId, 'customers', id), updatePayload);
     }
     try {
       await batch.commit();
@@ -561,6 +645,8 @@ export async function buildBackupBundle(
         nextFollowUpAt: c.nextFollowUpAt,
         estimatedValue: c.estimatedValue,
         isStarred: c.isStarred,
+        soldAt: c.soldAt,
+        machineCount: c.machineCount,
         createdAtIso: c.createdAt ? c.createdAt.toISOString() : undefined,
         updatedAtIso: c.updatedAt ? c.updatedAt.toISOString() : undefined,
         notes,

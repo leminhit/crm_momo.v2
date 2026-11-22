@@ -35,6 +35,11 @@ import {
 } from '../lib/crm-service';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import {
+  formatDateShort,
+  getCustomerMachineCount,
+  getCustomerSaleDate,
+} from '../lib/payroll';
+import {
   formatCurrencyVnd,
   getInitials,
   getMapsHref,
@@ -128,7 +133,7 @@ export function CustomerDetailDrawer({
   const handleStatusChange = async (nextStatus: CustomerStatus) => {
     if (!workspace) return;
     try {
-      await updateCustomerStatus(workspace.id, customer.id, nextStatus);
+      await updateCustomerStatus(workspace.id, customer.id, nextStatus, customer);
       toast.success(`Đã chuyển trạng thái sang ${CUSTOMER_STATUS_META[nextStatus].label}`);
     } catch {
       toast.error('Không thể cập nhật trạng thái.');
@@ -329,6 +334,16 @@ export function CustomerDetailDrawer({
             </div>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground pt-1 border-t border-border">
+              {customer.status === 'won' && (() => {
+                const saleInfo = getCustomerSaleDate(customer);
+                const machines = getCustomerMachineCount(customer);
+                return (
+                  <span className="font-medium text-emerald-700 dark:text-emerald-300 tabular-nums">
+                    {machines} loa · Ngày bán: {formatDateShort(saleInfo.dateStr)}
+                    {saleInfo.isFallback ? ' (tạm tính)' : ''}
+                  </span>
+                );
+              })()}
               {customer.source && <span>Nguồn: {customer.source}</span>}
               {customer.nextFollowUpAt && (
                 <span className="inline-flex items-center gap-1 text-foreground font-medium">

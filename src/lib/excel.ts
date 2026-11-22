@@ -1,6 +1,6 @@
 import { format } from 'date-fns';
-import * as XLSX from 'xlsx';
 import type { CustomerInputPayload } from './crm-service';
+import { getCustomerMachineCount } from './payroll';
 import {
   CUSTOMER_PRIORITY_META,
   CUSTOMER_STATUS_META,
@@ -10,10 +10,11 @@ import {
   type PhoneEntry,
 } from '../types/crm';
 
-export function exportCustomersToExcel(
+export async function exportCustomersToExcel(
   customers: CustomerRecord[],
   filenamePrefix = 'khach-hang-crm'
-): void {
+): Promise<void> {
+  const XLSX = await import('xlsx');
   const rows = customers.map((c, index) => {
     const primaryPhone = c.phones.find((p) => p.isPrimary) ?? c.phones[0];
     const allPhones = c.phones
@@ -30,6 +31,8 @@ export function exportCustomersToExcel(
       Email: c.email,
       'Trạng thái': CUSTOMER_STATUS_META[c.status]?.label ?? c.status,
       'Ưu tiên': CUSTOMER_PRIORITY_META[c.priority]?.label ?? c.priority,
+      'Số lượng loa': c.status === 'won' ? getCustomerMachineCount(c) : c.machineCount || '',
+      'Ngày bán': c.soldAt || '',
       'Giá trị dự kiến (VNĐ)': c.estimatedValue,
       'Địa chỉ': c.address,
       'Link Google Maps': c.googleMapsUrl,
@@ -54,6 +57,8 @@ export function exportCustomersToExcel(
     { wch: 24 },
     { wch: 18 },
     { wch: 12 },
+    { wch: 14 },
+    { wch: 14 },
     { wch: 18 },
     { wch: 34 },
     { wch: 36 },
@@ -72,7 +77,8 @@ export function exportCustomersToExcel(
   XLSX.writeFile(workbook, `${filenamePrefix}-${dateStamp}.xlsx`);
 }
 
-export function downloadExcelTemplate(): void {
+export async function downloadExcelTemplate(): Promise<void> {
+  const XLSX = await import('xlsx');
   const sampleRows = [
     {
       'Họ và tên': 'Nguyễn Minh Tuấn',
@@ -118,7 +124,7 @@ function mapVietnamesePriority(raw: string): CustomerPriority {
 export async function parseExcelCustomersFile(
   file: File
 ): Promise<CustomerInputPayload[]> {
-  const buffer = await file.arrayBuffer();
+  const [XLSX, buffer] = await Promise.all([import('xlsx'), file.arrayBuffer()]);
   const workbook = XLSX.read(buffer, { type: 'array' });
   const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!firstSheet) return [];
@@ -182,6 +188,11 @@ export async function parseExcelCustomersFile(
     const rawVal = Number(
       String(row['Giá trị dự kiến'] ?? row['Giá trị dự kiến (VNĐ)'] ?? '0').replace(/[^\d.]/g, '')
     );
+    const rawMachines = Number(
+      String(row['Số lượng loa'] ?? row['Số loa'] ?? row['machineCount'] ?? '1').replace(/[^\d]/g, '')
+    );
+    const parsedStatus = mapVietnameseStatus(String(row['Trạng thái'] ?? 'lead'));
+    const rawSoldAt = String(row['Ngày bán'] ?? row['soldAt'] ?? '').trim();
 
     results.push({
       fullName,
@@ -191,7 +202,7 @@ export async function parseExcelCustomersFile(
       email: String(row['Email'] ?? '').trim(),
       address: String(row['Địa chỉ'] ?? '').trim(),
       googleMapsUrl: String(row['Link Google Maps'] ?? '').trim(),
-      status: mapVietnameseStatus(String(row['Trạng thái'] ?? 'lead')),
+      status: parsedStatus,
       priority: mapVietnamesePriority(String(row['Ưu tiên'] ?? 'medium')),
       source: String(row['Nguồn'] ?? row['Nguồn khách'] ?? '').trim(),
       tags,
@@ -201,6 +212,11 @@ export async function parseExcelCustomersFile(
       ).trim(),
       estimatedValue: Number.isFinite(rawVal) ? rawVal : 0,
       isStarred: String(row['Đánh dấu sao'] ?? '').toLowerCase() === 'có',
+      soldAt: rawSoldAt,
+      machineCount:
+        Number.isFinite(rawMachines) && rawMachines >= 1
+          ? Math.min(1000, Math.floor(rawMachines))
+          : 1,
     });
   }
 

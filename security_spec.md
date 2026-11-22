@@ -5,7 +5,7 @@
 2. **No Self-Assigned Escalation**: Users cannot assign themselves to another user's workspace or elevate a member role without being the workspace owner.
 3. **Strict Schema Keys**: Every document create requires exact required keys and rejects any shadow/ghost fields via `hasAll` + `hasOnly`. Every update uses `affectedKeys().hasOnly(...)` inside named action branches AND re-validates the full entity via `isValid[Entity]()`.
 4. **Immutable Ownership & Temporal Integrity**: `ownerId`, `workspaceId`, `customerId`, and `createdAt` cannot be mutated after creation. `createdAt` and `updatedAt` must equal `request.time`.
-5. **Bounded Arrays & String Limits**: `phones` is bounded to 1–10 items with validated first element shape; `tags` is bounded to 0–10 items; all string fields enforce explicit `.size()` caps.
+5. **Bounded Arrays & Numeric/String Limits**: `phones` is bounded to 1–10 items with validated first element shape; `tags` is bounded to 0–10 items; `machineCount` is bounded to `0..1000`; all string fields (including `soldAt` max 32 chars) enforce explicit `.size()` caps.
 6. **PII & List Isolation**: Customer PII (phone numbers, email, address) is readable only by the owner/assignee (`resource.data.ownerId == request.auth.uid || resource.data.assignedTo == request.auth.uid`), enforced directly inside `allow list` without `get()` lookups.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads

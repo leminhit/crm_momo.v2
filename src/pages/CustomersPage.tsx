@@ -50,6 +50,12 @@ import {
 } from '../lib/crm-service';
 import { exportCustomersToExcel } from '../lib/excel';
 import {
+  formatDateShort,
+  getCustomerMachineCount,
+  getCustomerSaleDate,
+  groupWonCustomersByMonth,
+} from '../lib/payroll';
+import {
   formatCurrencyVnd,
   getInitials,
   getMapsHref,
@@ -105,6 +111,7 @@ export function CustomersPage({
   });
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [starredOnly, setStarredOnly] = useState(false);
+  const [selectedWonMonth, setSelectedWonMonth] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [sorting, setSorting] = useState<SortingState>([]);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
@@ -135,6 +142,7 @@ export function CustomersPage({
   const handleSaleTabChange = (nextTab: 'push' | 'won' | 'lost') => {
     setSaleTab(nextTab);
     setStatusFilter('all');
+    setSelectedWonMonth('all');
     setRowSelection({});
     setPagination((prev) => ({ ...prev, pageIndex: 0 }));
     if (nextTab === 'won') {
@@ -171,11 +179,26 @@ export function CustomersPage({
     [customers]
   );
 
+  const wonMonthGroupsAll = useMemo(
+    () => groupWonCustomersByMonth(customers),
+    [customers]
+  );
+  const totalWonMachinesAll = useMemo(
+    () => wonMonthGroupsAll.reduce((sum, g) => sum + g.totalMachines, 0),
+    [wonMonthGroupsAll]
+  );
+
   const filteredCustomers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return customers.filter((c) => {
       if (saleTab === 'won') {
         if (c.status !== 'won') return false;
+        if (
+          selectedWonMonth !== 'all' &&
+          getCustomerSaleDate(c).monthKey !== selectedWonMonth
+        ) {
+          return false;
+        }
       } else if (saleTab === 'lost') {
         if (c.status !== 'lost') return false;
       } else {
@@ -202,7 +225,25 @@ export function CustomersPage({
         tagMatch
       );
     });
-  }, [customers, saleTab, searchQuery, statusFilter, priorityFilter, starredOnly]);
+  }, [
+    customers,
+    saleTab,
+    selectedWonMonth,
+    searchQuery,
+    statusFilter,
+    priorityFilter,
+    starredOnly,
+  ]);
+
+  const filteredWonGroups = useMemo(() => {
+    if (saleTab !== 'won') return [];
+    return groupWonCustomersByMonth(filteredCustomers);
+  }, [saleTab, filteredCustomers]);
+
+  const filteredWonMachinesCount = useMemo(
+    () => filteredWonGroups.reduce((sum, g) => sum + g.totalMachines, 0),
+    [filteredWonGroups]
+  );
 
   const handleToggleStar = async (customer: CustomerRecord) => {
     if (!workspace) return;
@@ -455,7 +496,7 @@ export function CustomersPage({
     if (!workspace || selectedIds.length === 0) return;
     setBulkLoading(true);
     try {
-      await bulkUpdateCustomerStatus(workspace.id, selectedIds, status);
+      await bulkUpdateCustomerStatus(workspace.id, selectedIds, status, selectedCustomers);
       toast.success(
         `Đã chuyển ${selectedIds.length} khách hàng sang "${CUSTOMER_STATUS_META[status].label}"`
       );
@@ -482,15 +523,19 @@ export function CustomersPage({
     }
   };
 
-  const handleExportCurrent = () => {
+  const handleExportCurrent = async () => {
     const target =
       selectedCustomers.length > 0 ? selectedCustomers : filteredCustomers;
     if (target.length === 0) {
       toast.error('Không có dữ liệu để xuất Excel.');
       return;
     }
-    exportCustomersToExcel(target);
-    toast.success(`Đã xuất ${target.length} khách hàng ra file Excel`);
+    try {
+      await exportCustomersToExcel(target);
+      toast.success(`Đã xuất ${target.length} khách hàng ra file Excel`);
+    } catch {
+      toast.error('Không thể xuất file Excel. Vui lòng thử lại.');
+    }
   };
 
   const resetFilters = () => {
@@ -498,10 +543,38 @@ export function CustomersPage({
     handleStatusFilterChange('all');
     setPriorityFilter('all');
     setStarredOnly(false);
+    setSelectedWonMonth('all');
   };
 
   const tabTotal =
     saleTab === 'won' ? wonCount : saleTab === 'lost' ? lostCount : pushCount;
+
+  const toggleSingleRowSelection = (id: string) => {
+    setRowSelection((prev) => {
+      const next = { ...prev };
+      if (next[id]) {
+        delete next[id];
+      } else {
+        next[id] = true;
+      }
+      return next;
+    });
+  };
+
+  const toggleGroupSelection = (items: CustomerRecord[]) => {
+    const allSelected = items.every((item) => Boolean(rowSelection[item.id]));
+    setRowSelection((prev) => {
+      const next = { ...prev };
+      for (const item of items) {
+        if (allSelected) {
+          delete next[item.id];
+        } else {
+          next[item.id] = true;
+        }
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -649,13 +722,53 @@ export function CustomersPage({
           </div>
         </div>
 
+        {/* Monthly Quick Filter when in Đã bán Tab */}
+        {saleTab === 'won' && wonMonthGroupsAll.length > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pt-1 pb-0.5 border-t border-border">
+            <button
+              type="button"
+              onClick={() => setSelectedWonMonth('all')}
+              className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                selectedWonMonth === 'all'
+                  ? 'border-emerald-600 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500 dark:text-emerald-300'
+                  : 'border-border bg-background text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <span>Tất cả tháng</span>
+              <span className="font-mono tabular-nums text-[11px] opacity-85">
+                · {totalWonMachinesAll} loa
+              </span>
+            </button>
+            {wonMonthGroupsAll.map((g) => {
+              const active = selectedWonMonth === g.monthKey;
+              return (
+                <button
+                  key={g.monthKey}
+                  type="button"
+                  onClick={() => setSelectedWonMonth(g.monthKey)}
+                  className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                    active
+                      ? 'border-emerald-600 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500 dark:text-emerald-300'
+                      : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <span>{g.label}</span>
+                  <span className="font-mono tabular-nums text-[11px] opacity-85">
+                    · {g.totalMachines} loa
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Summary & Desktop View Switcher */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-border text-xs text-muted-foreground">
           <div className="flex flex-wrap items-center gap-2">
             <span className="tabular-nums">
               Hiển thị <strong className="text-foreground">{filteredCustomers.length}</strong> / {tabTotal}{' '}
               {saleTab === 'won'
-                ? 'khách đã bán'
+                ? `khách đã bán (${filteredWonMachinesCount} loa)`
                 : saleTab === 'lost'
                   ? 'khách ngưng theo dõi'
                   : 'khách cần push sale'}
@@ -670,7 +783,7 @@ export function CustomersPage({
                 · Có thể bấm Chăm sóc lại nếu khách có nhu cầu trở lại
               </span>
             )}
-            {(searchQuery || statusFilter !== 'all' || priorityFilter !== 'all' || starredOnly) && (
+            {(searchQuery || statusFilter !== 'all' || priorityFilter !== 'all' || starredOnly || selectedWonMonth !== 'all') && (
               <button
                 type="button"
                 onClick={resetFilters}
@@ -786,7 +899,7 @@ export function CustomersPage({
             Thử thay đổi từ khóa tìm kiếm, bộ lọc trạng thái hoặc thêm khách hàng mới.
           </p>
           <div className="mt-4 flex items-center justify-center gap-2">
-            {(searchQuery || statusFilter !== 'all' || priorityFilter !== 'all' || starredOnly) && (
+            {(searchQuery || statusFilter !== 'all' || priorityFilter !== 'all' || starredOnly || selectedWonMonth !== 'all') && (
               <Button type="button" variant="outline" size="sm" onClick={resetFilters}>
                 Xóa bộ lọc
               </Button>
@@ -796,6 +909,334 @@ export function CustomersPage({
               Thêm khách hàng
             </Button>
           </div>
+        </div>
+      ) : saleTab === 'won' ? (
+        <div className="space-y-6">
+          {filteredWonGroups.map((group) => {
+            const allGroupSelected =
+              group.customers.length > 0 &&
+              group.customers.every((c) => Boolean(rowSelection[c.id]));
+
+            return (
+              <section key={group.monthKey} className="space-y-3">
+                {/* Monthly Header */}
+                <div className="flex items-center justify-between gap-3 border-b border-border pb-2">
+                  <h2 className="text-sm font-semibold text-foreground">
+                    {group.label}
+                  </h2>
+                  <p className="text-xs font-mono tabular-nums text-muted-foreground">
+                    {group.customerCount} khách ·{' '}
+                    <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                      {group.totalMachines} loa
+                    </span>
+                  </p>
+                </div>
+
+                {/* Mobile & Card View for this Month */}
+                <div
+                  className={
+                    viewMode === 'cards'
+                      ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5'
+                      : 'grid grid-cols-1 gap-3 md:hidden'
+                  }
+                >
+                  {group.customers.map((c) => {
+                    const primary = c.phones.find((p) => p.isPrimary) ?? c.phones[0];
+                    const dial = primary ? normalizePhoneForDial(primary.number) : '';
+                    const zalo = primary ? getZaloUrl(primary.number) : '';
+                    const mapsHref = getMapsHref(c.googleMapsUrl, c.address);
+                    const machines = getCustomerMachineCount(c);
+                    const saleInfo = getCustomerSaleDate(c);
+
+                    return (
+                      <article
+                        key={c.id}
+                        className="min-w-0 rounded-xl border border-border bg-card p-3.5 sm:p-4 flex flex-col justify-between gap-3 hover:border-primary/40 transition-colors"
+                      >
+                        <div className="flex items-start justify-between gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => onSelectCustomer(c)}
+                            className="flex items-start gap-3 min-w-0 flex-1 text-left cursor-pointer"
+                          >
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
+                              {getInitials(c.fullName)}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <h3 className="truncate text-sm font-semibold text-foreground">
+                                {c.fullName}
+                              </h3>
+                              {(c.company || c.position) && (
+                                <p className="truncate text-xs text-muted-foreground">
+                                  {[c.position, c.company].filter(Boolean).join(' · ')}
+                                </p>
+                              )}
+                              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-mono tabular-nums text-muted-foreground">
+                                <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                                  {machines} loa
+                                </span>
+                                <span aria-hidden="true">·</span>
+                                <span>
+                                  {formatDateShort(saleInfo.dateStr)}
+                                  {saleInfo.isFallback ? ' (tạm tính)' : ''}
+                                </span>
+                              </div>
+                            </div>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleStar(c)}
+                            aria-label="Đánh dấu sao"
+                            className="flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted cursor-pointer shrink-0"
+                          >
+                            <Star
+                              className={`h-4 w-4 ${
+                                c.isStarred ? 'fill-amber-400 text-amber-500' : ''
+                              }`}
+                            />
+                          </button>
+                        </div>
+
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <p className="font-mono tabular-nums text-foreground font-medium">
+                            {primary?.number || 'Chưa có SĐT'}
+                            {c.phones.length > 1 && (
+                              <span className="ml-1.5 font-sans font-normal text-muted-foreground">
+                                (+{c.phones.length - 1} số)
+                              </span>
+                            )}
+                          </p>
+                          {c.address && <p className="truncate">{c.address}</p>}
+                          {c.quickNote && (
+                            <p className="line-clamp-2 text-muted-foreground/90">
+                              {c.quickNote}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-4 gap-2 pt-2 border-t border-border">
+                          {dial ? (
+                            <a
+                              href={`tel:${dial}`}
+                              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/40 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+                            >
+                              <Phone className="h-3.5 w-3.5 text-primary" />
+                              <span>Gọi</span>
+                            </a>
+                          ) : (
+                            <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
+                              —
+                            </span>
+                          )}
+
+                          {zalo ? (
+                            <a
+                              href={zalo}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg bg-sky-600/10 text-xs font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-600/20 transition-colors"
+                            >
+                              <MessageCircle className="h-3.5 w-3.5" />
+                              <span>Zalo</span>
+                            </a>
+                          ) : (
+                            <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
+                              —
+                            </span>
+                          )}
+
+                          {mapsHref ? (
+                            <a
+                              href={mapsHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/40 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+                            >
+                              <MapPin className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                              <span>Maps</span>
+                            </a>
+                          ) : (
+                            <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
+                              —
+                            </span>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => onEditCustomer(c)}
+                            className="flex min-h-[44px] items-center justify-center rounded-lg border border-border bg-card text-xs font-medium text-foreground hover:bg-muted transition-colors cursor-pointer"
+                          >
+                            Sửa
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop Table View for this Month */}
+                {viewMode === 'table' && (
+                  <div className="hidden md:block rounded-xl border border-border bg-card overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse text-left text-sm">
+                        <thead className="border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
+                          <tr>
+                            <th className="px-4 py-3 w-10">
+                              <input
+                                type="checkbox"
+                                checked={allGroupSelected}
+                                onChange={() => toggleGroupSelection(group.customers)}
+                                aria-label={`Chọn tất cả ${group.label}`}
+                                className="h-4 w-4 rounded border-input accent-primary cursor-pointer"
+                              />
+                            </th>
+                            <th className="px-4 py-3 whitespace-nowrap">Khách hàng</th>
+                            <th className="px-4 py-3 whitespace-nowrap">Số điện thoại &amp; Zalo</th>
+                            <th className="px-4 py-3 whitespace-nowrap text-right">Số loa</th>
+                            <th className="px-4 py-3 whitespace-nowrap">Ngày bán</th>
+                            <th className="px-4 py-3 whitespace-nowrap">Vị trí</th>
+                            <th className="px-4 py-3 whitespace-nowrap text-right">Thao tác</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {group.customers.map((c) => {
+                            const primary = c.phones.find((p) => p.isPrimary) ?? c.phones[0];
+                            const extra = c.phones.length - 1;
+                            const dial = primary ? normalizePhoneForDial(primary.number) : '';
+                            const zalo = primary ? getZaloUrl(primary.number) : '';
+                            const mapsHref = getMapsHref(c.googleMapsUrl, c.address);
+                            const machines = getCustomerMachineCount(c);
+                            const saleInfo = getCustomerSaleDate(c);
+
+                            return (
+                              <tr
+                                key={c.id}
+                                className="hover:bg-muted/35 transition-colors"
+                              >
+                                <td className="px-4 py-3 align-middle">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(rowSelection[c.id])}
+                                    onChange={() => toggleSingleRowSelection(c.id)}
+                                    aria-label={`Chọn ${c.fullName}`}
+                                    className="h-4 w-4 rounded border-input accent-primary cursor-pointer"
+                                  />
+                                </td>
+                                <td className="px-4 py-3 align-middle">
+                                  <div className="flex items-center gap-2.5 min-w-[200px]">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleStar(c)}
+                                      aria-label="Đánh dấu sao"
+                                      className="text-muted-foreground hover:text-amber-500 transition-colors cursor-pointer shrink-0"
+                                    >
+                                      <Star
+                                        className={`h-4 w-4 ${
+                                          c.isStarred ? 'fill-amber-400 text-amber-500' : ''
+                                        }`}
+                                      />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => onSelectCustomer(c)}
+                                      className="text-left min-w-0 cursor-pointer group"
+                                    >
+                                      <p className="font-medium text-foreground group-hover:text-primary transition-colors truncate">
+                                        {c.fullName}
+                                      </p>
+                                      {(c.company || c.position) && (
+                                        <p className="text-xs text-muted-foreground truncate">
+                                          {[c.position, c.company].filter(Boolean).join(' · ')}
+                                        </p>
+                                      )}
+                                    </button>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 align-middle">
+                                  <div className="flex items-center gap-2 min-w-[180px]">
+                                    <div className="min-w-0">
+                                      <p className="font-mono text-xs font-medium text-foreground tabular-nums">
+                                        {primary?.number || '—'}
+                                      </p>
+                                      {extra > 0 && (
+                                        <p className="text-[11px] text-muted-foreground">
+                                          +{extra} số khác
+                                        </p>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {dial && (
+                                        <a
+                                          href={`tel:${dial}`}
+                                          title={`Gọi ${primary?.number}`}
+                                          className="flex h-7 w-7 items-center justify-center rounded-md border border-border text-primary hover:bg-muted transition-colors"
+                                        >
+                                          <Phone className="h-3.5 w-3.5" />
+                                        </a>
+                                      )}
+                                      {primary?.hasZalo && zalo && (
+                                        <a
+                                          href={zalo}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          title="Mở Zalo"
+                                          className="flex h-7 items-center justify-center rounded-md border border-sky-200 dark:border-sky-900 bg-sky-500/10 px-2 text-[11px] font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-500/20 transition-colors"
+                                        >
+                                          Zalo
+                                        </a>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 align-middle text-right font-mono text-xs font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                                  {machines} loa
+                                </td>
+                                <td className="px-4 py-3 align-middle font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap">
+                                  {formatDateShort(saleInfo.dateStr)}
+                                  {saleInfo.isFallback ? ' (tạm)' : ''}
+                                </td>
+                                <td className="px-4 py-3 align-middle">
+                                  {mapsHref ? (
+                                    <a
+                                      href={mapsHref}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 text-xs text-primary hover:underline max-w-[200px] truncate"
+                                      title={c.address || c.googleMapsUrl}
+                                    >
+                                      <MapPin className="h-3.5 w-3.5 shrink-0" />
+                                      <span className="truncate">{c.address || 'Mở Google Maps'}</span>
+                                    </a>
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground truncate">
+                                      {c.address || '—'}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 align-middle text-right">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    onClick={() => onEditCustomer(c)}
+                                    title="Chỉnh sửa số loa / ngày bán"
+                                    aria-label={`Sửa ${c.fullName}`}
+                                  >
+                                    <Edit3 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </section>
+            );
+          })}
         </div>
       ) : (
         <>

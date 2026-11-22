@@ -3,6 +3,7 @@ import { format, isBefore, isToday, parseISO, startOfDay } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import {
   ArrowRight,
+  Banknote,
   CalendarClock,
   MapPin,
   MessageCircle,
@@ -17,6 +18,11 @@ import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
 import { useCrm } from '../contexts/CrmContext';
+import {
+  buildMonthlyPayrollReport,
+  getCurrentMonthKey,
+  getCustomerMachineCount,
+} from '../lib/payroll';
 import {
   formatCurrencyVnd,
   getInitials,
@@ -54,6 +60,7 @@ export function DashboardPage({
     const todayStart = startOfDay(new Date());
     let activePipelineValue = 0;
     let wonValue = 0;
+    let wonMachinesTotal = 0;
     let dueCount = 0;
     let starredCount = 0;
 
@@ -74,6 +81,7 @@ export function DashboardPage({
 
       if (c.status === 'won') {
         wonValue += c.estimatedValue || 0;
+        wonMachinesTotal += getCustomerMachineCount(c);
       } else if (c.status !== 'lost') {
         activePipelineValue += c.estimatedValue || 0;
       }
@@ -96,13 +104,17 @@ export function DashboardPage({
       a.customer.nextFollowUpAt.localeCompare(b.customer.nextFollowUpAt)
     );
 
+    const currentPayroll = buildMonthlyPayrollReport(customers, getCurrentMonthKey());
+
     return {
       total: customers.length,
       activePipelineValue,
       wonValue,
+      wonMachinesTotal,
       dueCount,
       starredCount,
       statusCounts,
+      currentPayroll,
       dueList: dueList.slice(0, 6),
       recentCustomers: customers.slice(0, 6),
     };
@@ -185,11 +197,13 @@ export function DashboardPage({
             <span>Đã bán</span>
             <Star className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
           </div>
-          <p className="mt-2 text-xl sm:text-2xl font-semibold tracking-tight font-mono tabular-nums text-foreground truncate">
-            {formatCurrencyVnd(stats.wonValue)}
+          <p className="mt-2 text-2xl sm:text-3xl font-semibold tracking-tight font-mono tabular-nums text-foreground">
+            {stats.wonMachinesTotal} <span className="text-sm font-sans font-normal text-muted-foreground">loa</span>
           </p>
           <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-            {stats.statusCounts.won} khách hàng đã bán
+            <Link to="/customers?status=won" className="text-primary hover:underline">
+              {stats.statusCounts.won} khách đã bán &rarr;
+            </Link>
           </p>
         </div>
 
@@ -206,6 +220,41 @@ export function DashboardPage({
               Xem lịch hôm nay &rarr;
             </Link>
           </p>
+        </div>
+      </section>
+
+      {/* Current Month Payroll & Sales Summary */}
+      <section className="rounded-xl border border-primary/30 bg-primary/5 p-4 sm:p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-xs font-medium text-primary">
+              <Banknote className="h-4 w-4" />
+              <span>Bảng lương {stats.currentPayroll.monthLabel}</span>
+            </div>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <p className="text-2xl font-semibold tracking-tight font-mono tabular-nums text-foreground">
+                {formatCurrencyVnd(stats.currentPayroll.breakdown.totalSalary)}
+              </p>
+              <p className="text-xs text-muted-foreground font-mono tabular-nums">
+                Cố định {formatCurrencyVnd(stats.currentPayroll.breakdown.baseSalary)} + Hoa hồng{' '}
+                {formatCurrencyVnd(stats.currentPayroll.breakdown.totalCommission)}
+              </p>
+            </div>
+            <p className="text-xs text-muted-foreground tabular-nums">
+              Đã bán trong tháng:{' '}
+              <strong className="text-foreground font-mono">
+                {stats.currentPayroll.breakdown.totalMachines} loa
+              </strong>{' '}
+              ({stats.currentPayroll.customerCount} khách hàng)
+            </p>
+          </div>
+
+          <Button asChild size="sm" variant="default" className="h-10 shrink-0 self-start sm:self-center">
+            <Link to="/payroll">
+              <span>Xem bảng lương chi tiết</span>
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </Button>
         </div>
       </section>
 

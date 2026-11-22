@@ -47,7 +47,7 @@ export function DataBackupPage() {
   const excelInputRef = useRef<HTMLInputElement | null>(null);
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     const target =
       exportStatusFilter === 'all'
         ? customers
@@ -57,13 +57,17 @@ export function DataBackupPage() {
       toast.error('Không có khách hàng nào khớp bộ lọc để xuất Excel.');
       return;
     }
-    exportCustomersToExcel(
-      target,
-      exportStatusFilter === 'all'
-        ? 'tat-ca-khach-hang'
-        : `khach-hang-${exportStatusFilter}`
-    );
-    toast.success(`Đã xuất ${target.length} khách hàng ra file Excel`);
+    try {
+      await exportCustomersToExcel(
+        target,
+        exportStatusFilter === 'all'
+          ? 'tat-ca-khach-hang'
+          : `khach-hang-${exportStatusFilter}`
+      );
+      toast.success(`Đã xuất ${target.length} khách hàng ra file Excel`);
+    } catch {
+      toast.error('Không thể xuất file Excel. Vui lòng thử lại.');
+    }
   };
 
   const handleSelectExcelFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -249,7 +253,9 @@ export function DataBackupPage() {
             variant="outline"
             size="sm"
             className="h-10 sm:h-9 w-full sm:w-auto"
-            onClick={downloadExcelTemplate}
+            onClick={() => {
+              void downloadExcelTemplate();
+            }}
           >
             <Download className="h-3.5 w-3.5" />
             Tải file Excel mẫu

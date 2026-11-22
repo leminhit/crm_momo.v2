@@ -100,7 +100,8 @@ service cloud.firestore {
           'id', 'workspaceId', 'ownerId', 'assignedTo', 'fullName', 'company',
           'position', 'phones', 'email', 'address', 'googleMapsUrl', 'status',
           'priority', 'source', 'tags', 'quickNote', 'nextFollowUpAt',
-          'estimatedValue', 'isStarred', 'createdAt', 'updatedAt'
+          'estimatedValue', 'isStarred', 'soldAt', 'machineCount',
+          'createdAt', 'updatedAt'
         ])
         && data.id is string && data.id == customerId && isValidId(data.id)
         && data.workspaceId is string && data.workspaceId == workspaceId && isValidId(data.workspaceId)
@@ -121,6 +122,8 @@ service cloud.firestore {
         && data.nextFollowUpAt is string && data.nextFollowUpAt.size() <= 32
         && (data.estimatedValue is int || data.estimatedValue is float) && data.estimatedValue >= 0
         && data.isStarred is bool
+        && (!('soldAt' in data) || (data.soldAt is string && data.soldAt.size() <= 32))
+        && (!('machineCount' in data) || ((data.machineCount is int || data.machineCount is float) && data.machineCount >= 0 && data.machineCount <= 1000))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -242,10 +245,11 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly([
               'fullName', 'company', 'position', 'phones', 'email', 'address',
               'googleMapsUrl', 'status', 'priority', 'source', 'tags', 'quickNote',
-              'nextFollowUpAt', 'estimatedValue', 'isStarred', 'assignedTo', 'updatedAt'
+              'nextFollowUpAt', 'estimatedValue', 'isStarred', 'soldAt', 'machineCount',
+              'assignedTo', 'updatedAt'
             ]) ||
-            // Action: Quick Status Change
-            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+            // Action: Quick Status Change (auto-populates soldAt/machineCount when closing sale)
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'soldAt', 'machineCount', 'updatedAt']) ||
             // Action: Toggle Starred
             incoming().diff(existing()).affectedKeys().hasOnly(['isStarred', 'updatedAt']) ||
             // Action: Quick Note & Follow-Up Update

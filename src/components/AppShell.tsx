@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import {
+  Banknote,
   CalendarClock,
   LayoutDashboard,
   Moon,
@@ -9,23 +10,56 @@ import {
   Users,
 } from 'lucide-react';
 import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom';
-import { CustomerDetailDrawer } from './CustomerDetailDrawer';
 import { CustomerFormModal } from './CustomerFormModal';
 import { OfflineIndicator } from './OfflineIndicator';
 import { PWAInstallButton } from './PWAInstallButton';
 import { Button } from './ui/button';
+import { Skeleton } from './ui/skeleton';
 import { useCrm } from '../contexts/CrmContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getInitials } from '../lib/utils';
-import { CustomersPage } from '../pages/CustomersPage';
 import { DashboardPage } from '../pages/DashboardPage';
-import { FollowUpsPage } from '../pages/FollowUpsPage';
-import { SettingsPage } from '../pages/SettingsPage';
 import type { CustomerRecord } from '../types/crm';
+
+const loadCustomersPage = () => import('../pages/CustomersPage');
+const loadPayrollPage = () => import('../pages/PayrollPage');
+const loadFollowUpsPage = () => import('../pages/FollowUpsPage');
+const loadSettingsPage = () => import('../pages/SettingsPage');
+const loadCustomerDetailDrawer = () => import('./CustomerDetailDrawer');
+
+const CustomersPage = lazy(() =>
+  loadCustomersPage().then((m) => ({ default: m.CustomersPage }))
+);
+const PayrollPage = lazy(() =>
+  loadPayrollPage().then((m) => ({ default: m.PayrollPage }))
+);
+const FollowUpsPage = lazy(() =>
+  loadFollowUpsPage().then((m) => ({ default: m.FollowUpsPage }))
+);
+const SettingsPage = lazy(() =>
+  loadSettingsPage().then((m) => ({ default: m.SettingsPage }))
+);
+const CustomerDetailDrawer = lazy(() =>
+  loadCustomerDetailDrawer().then((m) => ({ default: m.CustomerDetailDrawer }))
+);
+
+function RoutePageFallback() {
+  return (
+    <div className="space-y-4">
+      <Skeleton className="h-12 w-full rounded-xl" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Skeleton className="h-28 w-full rounded-xl" />
+        <Skeleton className="h-28 w-full rounded-xl" />
+      </div>
+      <Skeleton className="h-64 w-full rounded-xl" />
+    </div>
+  );
+}
 
 const NAV_ITEMS = [
   { to: '/', label: 'Tổng quan', icon: LayoutDashboard, end: true },
   { to: '/customers', label: 'Khách hàng', icon: Users, end: false },
+  { to: '/payroll', label: 'Bảng lương', icon: Banknote, end: false },
   { to: '/follow-ups', label: 'Chăm sóc', icon: CalendarClock, end: false },
   { to: '/settings', label: 'Cài đặt', icon: Settings, end: false },
 ];
@@ -33,6 +67,7 @@ const NAV_ITEMS = [
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Tổng quan CRM',
   '/customers': 'Danh sách khách hàng',
+  '/payroll': 'Bảng lương & Hoa hồng',
   '/follow-ups': 'Lịch hẹn & Chăm sóc',
   '/settings': 'Cài đặt & Dữ liệu',
 };
@@ -64,6 +99,37 @@ export function AppShell() {
   const handleSelectCustomer = (customer: CustomerRecord) => {
     setSelectedCustomerId(customer.id);
   };
+
+  useEffect(() => {
+    let idleId: number | null = null;
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+
+    const prefetchChunks = () => {
+      void loadCustomersPage();
+      void loadPayrollPage();
+      void loadCustomerDetailDrawer();
+    };
+
+    const win = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+
+    if (typeof win.requestIdleCallback === 'function') {
+      idleId = win.requestIdleCallback(prefetchChunks, { timeout: 2000 });
+    } else {
+      timerId = setTimeout(prefetchChunks, 1200);
+    }
+
+    return () => {
+      if (idleId !== null && typeof win.cancelIdleCallback === 'function') {
+        win.cancelIdleCallback(idleId);
+      }
+      if (timerId !== null) {
+        clearTimeout(timerId);
+      }
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-background text-foreground flex">
@@ -195,47 +261,59 @@ export function AppShell() {
 
         {/* Page Viewport */}
         <main className="flex-1 px-4 sm:px-6 py-5 sm:py-6 pb-24 md:pb-8 max-w-7xl w-full mx-auto">
-          <Routes>
-            <Route
-              path="/"
-              element={
-                <DashboardPage
-                  onAddCustomer={handleOpenCreate}
-                  onSelectCustomer={handleSelectCustomer}
-                />
-              }
-            />
-            <Route
-              path="/customers"
-              element={
-                <CustomersPage
-                  onAddCustomer={handleOpenCreate}
-                  onEditCustomer={handleOpenEdit}
-                  onSelectCustomer={handleSelectCustomer}
-                />
-              }
-            />
-            <Route
-              path="/follow-ups"
-              element={<FollowUpsPage onSelectCustomer={handleSelectCustomer} />}
-            />
-            <Route path="/data" element={<Navigate to="/settings" replace />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Routes>
+          <Suspense fallback={<RoutePageFallback />}>
+            <Routes>
+              <Route
+                path="/"
+                element={
+                  <DashboardPage
+                    onAddCustomer={handleOpenCreate}
+                    onSelectCustomer={handleSelectCustomer}
+                  />
+                }
+              />
+              <Route
+                path="/customers"
+                element={
+                  <CustomersPage
+                    onAddCustomer={handleOpenCreate}
+                    onEditCustomer={handleOpenEdit}
+                    onSelectCustomer={handleSelectCustomer}
+                  />
+                }
+              />
+              <Route
+                path="/payroll"
+                element={
+                  <PayrollPage
+                    onSelectCustomer={handleSelectCustomer}
+                    onEditCustomer={handleOpenEdit}
+                    onAddCustomer={handleOpenCreate}
+                  />
+                }
+              />
+              <Route
+                path="/follow-ups"
+                element={<FollowUpsPage onSelectCustomer={handleSelectCustomer} />}
+              />
+              <Route path="/data" element={<Navigate to="/settings" replace />} />
+              <Route path="/settings" element={<SettingsPage />} />
+            </Routes>
+          </Suspense>
         </main>
       </div>
 
-      {/* Mobile Fixed Bottom Tab Bar with Prominent Quick-Add CTA */}
+      {/* Mobile Fixed Bottom Tab Bar (5 Columns with Center Quick-Add CTA) */}
       <nav
         aria-label="Điều hướng di động"
         className="md:hidden fixed bottom-0 inset-x-0 z-30 border-t border-border bg-card/95 backdrop-blur-md pb-safe"
       >
-        <div className="grid grid-cols-4 h-16 items-center px-1">
+        <div className="grid grid-cols-5 h-16 items-center px-1">
           <NavLink
             to="/"
             end
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium transition-colors ${
+              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium whitespace-nowrap transition-colors ${
                 isActive ? 'text-primary' : 'text-muted-foreground'
               }`
             }
@@ -247,7 +325,7 @@ export function AppShell() {
           <NavLink
             to="/customers"
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium transition-colors ${
+              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium whitespace-nowrap transition-colors ${
                 isActive ? 'text-primary' : 'text-muted-foreground'
               }`
             }
@@ -256,7 +334,7 @@ export function AppShell() {
             <span>Khách hàng</span>
           </NavLink>
 
-          <div className="flex items-center justify-center px-1.5">
+          <div className="flex items-center justify-center px-1">
             <button
               type="button"
               onClick={handleOpenCreate}
@@ -264,16 +342,28 @@ export function AppShell() {
               className="flex flex-col items-center justify-center w-full h-11 rounded-xl bg-primary text-primary-foreground shadow-sm active:scale-[0.97] transition-transform cursor-pointer"
             >
               <Plus className="h-5 w-5" />
-              <span className="text-[10px] font-semibold leading-none mt-0.5">
+              <span className="text-[10px] font-semibold leading-none mt-0.5 whitespace-nowrap">
                 Thêm
               </span>
             </button>
           </div>
 
           <NavLink
+            to="/payroll"
+            className={({ isActive }) =>
+              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium whitespace-nowrap transition-colors ${
+                isActive ? 'text-primary' : 'text-muted-foreground'
+              }`
+            }
+          >
+            <Banknote className="h-5 w-5" />
+            <span>Bảng lương</span>
+          </NavLink>
+
+          <NavLink
             to="/follow-ups"
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium transition-colors ${
+              `flex flex-col items-center justify-center gap-0.5 min-h-[44px] text-[10px] font-medium whitespace-nowrap transition-colors ${
                 isActive ? 'text-primary' : 'text-muted-foreground'
               }`
             }
@@ -294,14 +384,18 @@ export function AppShell() {
       />
 
       {/* Customer Detail Drawer */}
-      <CustomerDetailDrawer
-        customer={selectedCustomer}
-        open={Boolean(selectedCustomer)}
-        onOpenChange={(open) => {
-          if (!open) setSelectedCustomerId(null);
-        }}
-        onEdit={handleOpenEdit}
-      />
+      {selectedCustomer && (
+        <Suspense fallback={null}>
+          <CustomerDetailDrawer
+            customer={selectedCustomer}
+            open={Boolean(selectedCustomer)}
+            onOpenChange={(open) => {
+              if (!open) setSelectedCustomerId(null);
+            }}
+            onEdit={handleOpenEdit}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

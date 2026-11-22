@@ -1,4 +1,11 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -11,8 +18,76 @@ import { auth, db, googleProvider, handleFirestoreError, OperationType } from '.
 import { ensureUserWorkspace, mapCustomerDoc } from '../lib/crm-service';
 import type { CustomerRecord, UserProfileRecord, WorkspaceRecord } from '../types/crm';
 
+interface CachedSessionHint {
+  uid: string;
+  displayName: string;
+  email: string;
+  photoURL?: string;
+  workspaceId: string;
+  workspaceName: string;
+  workspaceMode: 'personal' | 'team';
+}
+
+const SESSION_HINT_KEY = 'crm_session_hint_v1';
+
+function readSessionHint(): CachedSessionHint | null {
+  try {
+    const raw = localStorage.getItem(SESSION_HINT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CachedSessionHint>;
+    if (!parsed.uid || !parsed.workspaceId) return null;
+    return {
+      uid: String(parsed.uid),
+      displayName: String(parsed.displayName || 'Người dùng CRM'),
+      email: String(parsed.email || ''),
+      photoURL: typeof parsed.photoURL === 'string' ? parsed.photoURL : undefined,
+      workspaceId: String(parsed.workspaceId),
+      workspaceName: String(parsed.workspaceName || 'CRM Cá Nhân'),
+      workspaceMode: parsed.workspaceMode === 'team' ? 'team' : 'personal',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionHint(hint: CachedSessionHint | null): void {
+  try {
+    if (!hint) {
+      localStorage.removeItem(SESSION_HINT_KEY);
+    } else {
+      localStorage.setItem(SESSION_HINT_KEY, JSON.stringify(hint));
+    }
+  } catch {
+    // Ignore storage quota / private mode errors
+  }
+}
+
+function buildProfileFromHint(hint: CachedSessionHint): UserProfileRecord {
+  return {
+    uid: hint.uid,
+    displayName: hint.displayName,
+    email: hint.email,
+    photoURL: hint.photoURL,
+    defaultWorkspaceId: hint.workspaceId,
+    createdAt: null,
+    updatedAt: null,
+  };
+}
+
+function buildWorkspaceFromHint(hint: CachedSessionHint): WorkspaceRecord {
+  return {
+    id: hint.workspaceId,
+    name: hint.workspaceName,
+    ownerId: hint.uid,
+    mode: hint.workspaceMode,
+    createdAt: null,
+    updatedAt: null,
+  };
+}
+
 interface CrmContextValue {
   user: User | null;
+  isAuthenticated: boolean;
   profile: UserProfileRecord | null;
   workspace: WorkspaceRecord | null;
   customers: CustomerRecord[];
@@ -22,62 +97,158 @@ interface CrmContextValue {
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   updateLocalWorkspaceName: (name: string, mode: 'personal' | 'team') => void;
+  ensureWorkspaceReady: () => Promise<{ uid: string; workspaceId: string }>;
 }
 
 const CrmContext = createContext<CrmContextValue | null>(null);
 
 export function CrmProvider({ children }: { children: React.ReactNode }) {
+  const initialHintRef = useRef<CachedSessionHint | null>(readSessionHint());
+
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfileRecord | null>(null);
-  const [workspace, setWorkspace] = useState<WorkspaceRecord | null>(null);
+  const [hasCachedSession, setHasCachedSession] = useState<boolean>(
+    Boolean(initialHintRef.current)
+  );
+  const [profile, setProfile] = useState<UserProfileRecord | null>(() =>
+    initialHintRef.current ? buildProfileFromHint(initialHintRef.current) : null
+  );
+  const [workspace, setWorkspace] = useState<WorkspaceRecord | null>(() =>
+    initialHintRef.current ? buildWorkspaceFromHint(initialHintRef.current) : null
+  );
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
-  const [loadingAuth, setLoadingAuth] = useState(true);
-  const [loadingData, setLoadingData] = useState(false);
+  const [loadingAuth, setLoadingAuth] = useState<boolean>(!initialHintRef.current);
+  const [loadingData, setLoadingData] = useState<boolean>(Boolean(initialHintRef.current));
   const [signingIn, setSigningIn] = useState(false);
   const [fatalError, setFatalError] = useState<Error | null>(null);
+
+  const workspaceReadyPromiseRef = useRef<Promise<{ uid: string; workspaceId: string }> | null>(
+    null
+  );
+  const authReadyResolverRef = useRef<{
+    resolve: (u: User | null) => void;
+  } | null>(null);
+  const authReadyPromiseRef = useRef<Promise<User | null>>(
+    new Promise((resolve) => {
+      authReadyResolverRef.current = { resolve };
+    })
+  );
 
   if (fatalError) {
     throw fatalError;
   }
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
+      if (authReadyResolverRef.current) {
+        authReadyResolverRef.current.resolve(firebaseUser);
+        authReadyResolverRef.current = null;
+      }
+
       if (!firebaseUser) {
+        writeSessionHint(null);
+        setHasCachedSession(false);
         setProfile(null);
         setWorkspace(null);
         setCustomers([]);
+        workspaceReadyPromiseRef.current = null;
         setLoadingAuth(false);
         setLoadingData(false);
         return;
       }
 
+      // Immediately unlock UI & optimistic workspace so AppShell + listener start with zero waterfall
+      const cached = readSessionHint();
+      const matchingCache = cached && cached.uid === firebaseUser.uid ? cached : null;
+      const optimisticWsId = matchingCache?.workspaceId || `personal_${firebaseUser.uid}`;
+
+      setHasCachedSession(true);
+      setLoadingAuth(false);
       setLoadingData(true);
-      try {
-        const result = await ensureUserWorkspace(firebaseUser);
-        setProfile(result.profile);
-        setWorkspace(result.workspace);
-      } catch (error) {
-        const err = error instanceof Error ? error : new Error(String(error));
-        setFatalError(err);
-      } finally {
-        setLoadingAuth(false);
-      }
+
+      setProfile((prev) =>
+        prev && prev.uid === firebaseUser.uid
+          ? prev
+          : {
+              uid: firebaseUser.uid,
+              displayName:
+                matchingCache?.displayName ||
+                firebaseUser.displayName ||
+                firebaseUser.email?.split('@')[0] ||
+                'Người dùng CRM',
+              email: matchingCache?.email || firebaseUser.email || '',
+              photoURL: matchingCache?.photoURL || firebaseUser.photoURL || undefined,
+              defaultWorkspaceId: optimisticWsId,
+              createdAt: null,
+              updatedAt: null,
+            }
+      );
+
+      setWorkspace((prev) =>
+        prev && prev.ownerId === firebaseUser.uid
+          ? prev
+          : {
+              id: optimisticWsId,
+              name: matchingCache?.workspaceName || 'CRM Cá Nhân',
+              ownerId: firebaseUser.uid,
+              mode: matchingCache?.workspaceMode || 'personal',
+              createdAt: null,
+              updatedAt: null,
+            }
+      );
+
+      // Sync actual workspace & profile in background without blocking initial render
+      const syncPromise = ensureUserWorkspace(firebaseUser)
+        .then((result) => {
+          setProfile(result.profile);
+          setWorkspace((prev) =>
+            prev &&
+            prev.id === result.workspace.id &&
+            prev.name === result.workspace.name &&
+            prev.mode === result.workspace.mode &&
+            prev.createdAt !== null
+              ? prev
+              : result.workspace
+          );
+          writeSessionHint({
+            uid: firebaseUser.uid,
+            displayName: result.profile.displayName,
+            email: result.profile.email,
+            photoURL: result.profile.photoURL,
+            workspaceId: result.workspace.id,
+            workspaceName: result.workspace.name,
+            workspaceMode: result.workspace.mode,
+          });
+          return {
+            uid: firebaseUser.uid,
+            workspaceId: result.workspace.id,
+          };
+        })
+        .catch((error) => {
+          const err = error instanceof Error ? error : new Error(String(error));
+          setFatalError(err);
+          throw err;
+        });
+
+      workspaceReadyPromiseRef.current = syncPromise;
     });
 
     return () => unsub();
   }, []);
 
+  const activeUserId = user?.uid ?? null;
+  const activeWorkspaceId = workspace?.id ?? null;
+
   useEffect(() => {
-    if (!user || !workspace) {
+    if (!activeUserId || !activeWorkspaceId) {
       return;
     }
 
     setLoadingData(true);
-    const customersPath = `workspaces/${workspace.id}/customers`;
+    const customersPath = `workspaces/${activeWorkspaceId}/customers`;
     const q = query(
-      collection(db, 'workspaces', workspace.id, 'customers'),
-      where('ownerId', '==', user.uid)
+      collection(db, 'workspaces', activeWorkspaceId, 'customers'),
+      where('ownerId', '==', activeUserId)
     );
 
     const unsub = onSnapshot(
@@ -103,7 +274,25 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
     );
 
     return () => unsub();
-  }, [user, workspace]);
+  }, [activeUserId, activeWorkspaceId]);
+
+  const ensureWorkspaceReady = useCallback(async () => {
+    if (workspaceReadyPromiseRef.current) {
+      return workspaceReadyPromiseRef.current;
+    }
+    const resolvedUser = user ?? (await authReadyPromiseRef.current);
+    if (!resolvedUser) {
+      throw new Error('Phiên đăng nhập chưa sẵn sàng.');
+    }
+    if (workspaceReadyPromiseRef.current) {
+      return workspaceReadyPromiseRef.current;
+    }
+    const result = await ensureUserWorkspace(resolvedUser);
+    return {
+      uid: resolvedUser.uid,
+      workspaceId: result.workspace.id,
+    };
+  }, [user]);
 
   const signInWithGoogle = useCallback(async () => {
     setSigningIn(true);
@@ -134,6 +323,8 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     try {
+      writeSessionHint(null);
+      setHasCachedSession(false);
       await firebaseSignOut(auth);
       toast.success('Đã đăng xuất');
     } catch (error) {
@@ -143,13 +334,26 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const updateLocalWorkspaceName = useCallback((name: string, mode: 'personal' | 'team') => {
-    setWorkspace((prev) => (prev ? { ...prev, name, mode } : prev));
+    setWorkspace((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev, name, mode };
+      const cached = readSessionHint();
+      if (cached && cached.uid === prev.ownerId) {
+        writeSessionHint({
+          ...cached,
+          workspaceName: name,
+          workspaceMode: mode,
+        });
+      }
+      return updated;
+    });
   }, []);
 
   return (
     <CrmContext.Provider
       value={{
         user,
+        isAuthenticated: Boolean(user) || hasCachedSession,
         profile,
         workspace,
         customers,
@@ -159,6 +363,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
         signInWithGoogle,
         signOut,
         updateLocalWorkspaceName,
+        ensureWorkspaceReady,
       }}
     >
       {children}

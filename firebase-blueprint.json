@@ -214,6 +214,15 @@
         "isStarred": {
           "type": "boolean"
         },
+        "soldAt": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Sale date (YYYY-MM-DD) used for monthly sales grouping and payroll."
+        },
+        "machineCount": {
+          "type": "number",
+          "description": "Number of speakers / stores purchased by this customer."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"

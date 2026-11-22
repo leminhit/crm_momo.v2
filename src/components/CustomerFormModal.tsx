@@ -4,6 +4,7 @@ import {
   ExternalLink,
   Loader2,
   LocateFixed,
+  Minus,
   Plus,
   Star,
   Trash2,
@@ -19,6 +20,7 @@ import { Switch } from './ui/switch';
 import { Textarea } from './ui/textarea';
 import { useCrm } from '../contexts/CrmContext';
 import { createCustomer, updateCustomer } from '../lib/crm-service';
+import { getTodayDateString } from '../lib/payroll';
 import { getMapsHref } from '../lib/utils';
 import {
   CRM_LIMITS,
@@ -52,7 +54,7 @@ export function CustomerFormModal({
   editingCustomer,
   onSaved,
 }: CustomerFormModalProps) {
-  const { user, workspace } = useCrm();
+  const { ensureWorkspaceReady } = useCrm();
   const isEditing = Boolean(editingCustomer);
   const [locatingGps, setLocatingGps] = useState(false);
 
@@ -75,6 +77,8 @@ export function CustomerFormModal({
       nextFollowUpAt: '',
       estimatedValue: 0,
       isStarred: false,
+      soldAt: '',
+      machineCount: 1,
     },
   });
 
@@ -115,6 +119,11 @@ export function CustomerFormModal({
         nextFollowUpAt: editingCustomer.nextFollowUpAt,
         estimatedValue: editingCustomer.estimatedValue,
         isStarred: editingCustomer.isStarred,
+        soldAt:
+          editingCustomer.soldAt ||
+          (editingCustomer.status === 'won' ? getTodayDateString() : ''),
+        machineCount:
+          editingCustomer.machineCount >= 1 ? editingCustomer.machineCount : 1,
       });
     } else {
       reset({
@@ -133,6 +142,8 @@ export function CustomerFormModal({
         nextFollowUpAt: '',
         estimatedValue: 0,
         isStarred: false,
+        soldAt: '',
+        machineCount: 1,
       });
     }
   }, [open, editingCustomer, reset]);
@@ -142,6 +153,20 @@ export function CustomerFormModal({
   const watchedMapsUrl = watch('googleMapsUrl');
   const watchedStarred = watch('isStarred');
   const watchedStatus = watch('status');
+  const watchedSoldAt = watch('soldAt');
+  const watchedMachineCount = watch('machineCount');
+
+  useEffect(() => {
+    if (!open) return;
+    if (watchedStatus === 'won') {
+      if (!watchedSoldAt) {
+        setValue('soldAt', getTodayDateString(), { shouldDirty: true });
+      }
+      if (!watchedMachineCount || Number(watchedMachineCount) < 1) {
+        setValue('machineCount', 1, { shouldDirty: true });
+      }
+    }
+  }, [open, watchedStatus, watchedSoldAt, watchedMachineCount, setValue]);
 
   const handleSetPrimaryPhone = (targetIdx: number) => {
     watchedPhones.forEach((_, idx) => {
@@ -189,10 +214,14 @@ export function CustomerFormModal({
   };
 
   const onSubmit = async (values: CustomerFormValues) => {
-    if (!user || !workspace) {
-      toast.error('Phiên đăng nhập chưa sẵn sàng.');
-      return;
-    }
+    const resolvedSoldAt =
+      values.status === 'won'
+        ? values.soldAt?.trim() || getTodayDateString()
+        : values.soldAt?.trim() || '';
+    const resolvedMachineCount =
+      values.status === 'won'
+        ? Math.max(1, Math.floor(Number(values.machineCount) || 1))
+        : Math.max(0, Math.floor(Number(values.machineCount) || 1));
 
     const payload = isEditing
       ? {
@@ -211,6 +240,8 @@ export function CustomerFormModal({
           nextFollowUpAt: values.nextFollowUpAt,
           estimatedValue: Number(values.estimatedValue) || 0,
           isStarred: values.isStarred,
+          soldAt: resolvedSoldAt,
+          machineCount: resolvedMachineCount,
         }
       : {
           fullName: values.fullName,
@@ -228,28 +259,35 @@ export function CustomerFormModal({
           nextFollowUpAt: '',
           estimatedValue: 0,
           isStarred: values.isStarred,
+          soldAt: resolvedSoldAt,
+          machineCount: resolvedMachineCount,
         };
 
     try {
+      const session = await ensureWorkspaceReady();
       if (editingCustomer) {
         await updateCustomer(
-          workspace.id,
+          session.workspaceId,
           editingCustomer.id,
-          editingCustomer.assignedTo || user.uid,
+          editingCustomer.assignedTo || session.uid,
           payload
         );
         toast.success(`Đã cập nhật khách hàng ${values.fullName}`);
         onOpenChange(false);
         onSaved?.(editingCustomer.id);
       } else {
-        const newId = await createCustomer(workspace.id, user.uid, payload);
+        const newId = await createCustomer(session.workspaceId, session.uid, payload);
         toast.success(`Đã thêm khách hàng ${values.fullName}`);
         onOpenChange(false);
         onSaved?.(newId);
       }
     } catch (error) {
       console.error('Save customer error:', error);
-      toast.error('Không thể lưu khách hàng. Vui lòng kiểm tra dữ liệu và thử lại.');
+      const message =
+        error instanceof Error && error.message.includes('Phiên đăng nhập')
+          ? error.message
+          : 'Không thể lưu khách hàng. Vui lòng kiểm tra dữ liệu và thử lại.';
+      toast.error(message);
     }
   };
 
@@ -468,7 +506,7 @@ export function CustomerFormModal({
 
         {/* Status Selection */}
         {!isEditing ? (
-          <div className="space-y-2 border-t border-border pt-3.5 sm:pt-4">
+          <div className="space-y-3 border-t border-border pt-3.5 sm:pt-4">
             <Label>Trạng thái kinh doanh</Label>
             <div className="grid grid-cols-2 gap-2.5">
               {CREATE_STATUS_OPTIONS.map((opt) => {
@@ -560,6 +598,71 @@ export function CustomerFormModal({
               {errors.email && (
                 <p className="text-xs text-destructive">{errors.email.message}</p>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Sale Date & Speaker/Store Quantity when Won */}
+        {watchedStatus === 'won' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4 border-t border-border pt-3.5">
+            <div className="space-y-1.5">
+              <Label htmlFor="crm-machineCount">
+                Số lượng loa (cửa hàng) <span className="text-destructive">*</span>
+              </Label>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => {
+                    const current = Math.max(1, Number(watchedMachineCount) || 1);
+                    setValue('machineCount', Math.max(1, current - 1), { shouldDirty: true });
+                  }}
+                  aria-label="Giảm số lượng loa"
+                  className="h-11 w-11 sm:h-10 sm:w-10 shrink-0"
+                >
+                  <Minus className="h-4 w-4" />
+                </Button>
+                <Input
+                  id="crm-machineCount"
+                  type="number"
+                  min={1}
+                  max={CRM_LIMITS.MACHINE_COUNT_MAX}
+                  className="text-center font-mono tabular-nums"
+                  {...register('machineCount')}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => {
+                    const current = Math.max(0, Number(watchedMachineCount) || 0);
+                    setValue(
+                      'machineCount',
+                      Math.min(CRM_LIMITS.MACHINE_COUNT_MAX, current + 1),
+                      { shouldDirty: true }
+                    );
+                  }}
+                  aria-label="Tăng số lượng loa"
+                  className="h-11 w-11 sm:h-10 sm:w-10 shrink-0"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                1 cửa hàng lắp đặt = 1 loa (dùng để tính hoa hồng).
+              </p>
+              {errors.machineCount && (
+                <p className="text-xs text-destructive">{errors.machineCount.message}</p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="crm-soldAt">Ngày bán</Label>
+              <Input id="crm-soldAt" type="date" {...register('soldAt')} />
+              <p className="text-xs text-muted-foreground">
+                Tự điền hôm nay khi chốt, dùng phân loại theo tháng.
+              </p>
             </div>
           </div>
         )}

@@ -39,6 +39,8 @@ export interface CustomerRecord {
   nextFollowUpAt: string;
   estimatedValue: number;
   isStarred: boolean;
+  soldAt: string;
+  machineCount: number;
   createdAt: Date | null;
   updatedAt: Date | null;
 }
@@ -63,6 +65,8 @@ export interface CustomerFirestoreDoc {
   nextFollowUpAt: string;
   estimatedValue: number;
   isStarred: boolean;
+  soldAt?: string;
+  machineCount?: number;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
