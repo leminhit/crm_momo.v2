@@ -105,9 +105,44 @@ export function getOrderSaleDate(
   return parseSaleDateString(order.soldAt, order.updatedAt, order.createdAt);
 }
 
+export function getCustomerCreatedDate(
+  customer: Pick<CustomerRecord, 'createdDate' | 'createdAt' | 'updatedAt'>
+): string {
+  const raw = (customer.createdDate ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    return raw.slice(0, 10);
+  }
+  const fallbackDate = customer.createdAt ?? customer.updatedAt ?? new Date();
+  return format(fallbackDate, 'yyyy-MM-dd');
+}
+
+export function compareCustomersByCreatedDate(
+  a: CustomerRecord,
+  b: CustomerRecord,
+  direction: 'desc' | 'asc' = 'desc'
+): number {
+  const da = getCustomerCreatedDate(a);
+  const db = getCustomerCreatedDate(b);
+  if (da !== db) {
+    return direction === 'desc' ? db.localeCompare(da) : da.localeCompare(db);
+  }
+  const ca = a.createdAt ? a.createdAt.getTime() : 0;
+  const cb = b.createdAt ? b.createdAt.getTime() : 0;
+  if (ca !== cb) {
+    return direction === 'desc' ? cb - ca : ca - cb;
+  }
+  const ua = a.updatedAt ? a.updatedAt.getTime() : 0;
+  const ub = b.updatedAt ? b.updatedAt.getTime() : 0;
+  if (ua !== ub) {
+    return direction === 'desc' ? ub - ua : ua - ub;
+  }
+  return a.fullName.localeCompare(b.fullName, 'vi');
+}
+
 export function generateSuggestedOrderCode(
   orders: Pick<OrderRecord, 'orderCode'>[],
-  soldAt: string = getTodayDateString()
+  soldAt: string = getTodayDateString(),
+  extraReservedCodes?: Set<string>
 ): string {
   const match = /^(\d{4})-(\d{2})/.exec(soldAt.trim());
   const yymm = match ? `${match[1].slice(2)}${match[2]}` : format(new Date(), 'yyMM');
@@ -115,6 +150,11 @@ export function generateSuggestedOrderCode(
   const existingCodes = new Set(
     orders.map((o) => o.orderCode.trim().toUpperCase())
   );
+  if (extraReservedCodes) {
+    for (const code of extraReservedCodes) {
+      existingCodes.add(code.trim().toUpperCase());
+    }
+  }
 
   let seq = 1;
   while (seq < 10000) {

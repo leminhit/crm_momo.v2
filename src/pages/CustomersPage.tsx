@@ -16,6 +16,8 @@ import {
 } from '@tanstack/react-table';
 import { format } from 'date-fns';
 import {
+  ArrowDown,
+  ArrowUp,
   ArrowUpDown,
   ChevronLeft,
   ChevronRight,
@@ -50,7 +52,9 @@ import {
 } from '../lib/crm-service';
 import { exportCustomersToExcel } from '../lib/excel';
 import {
+  compareCustomersByCreatedDate,
   formatDateShort,
+  getCustomerCreatedDate,
   groupWonCustomersByMonth,
 } from '../lib/payroll';
 import {
@@ -110,6 +114,7 @@ export function CustomersPage({
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [starredOnly, setStarredOnly] = useState(false);
   const [selectedWonMonth, setSelectedWonMonth] = useState<string>('all');
+  const [createdSortDir, setCreatedSortDir] = useState<'desc' | 'asc'>('desc');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [sorting, setSorting] = useState<SortingState>([]);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
@@ -223,7 +228,7 @@ export function CustomersPage({
 
   const filteredCustomers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return customers.filter((c) => {
+    const list = customers.filter((c) => {
       if (saleTab === 'won') {
         const months = customerWonMonthsMap.get(c.id);
         if (!months || months.size === 0) return false;
@@ -265,6 +270,8 @@ export function CustomersPage({
         orderMatch
       );
     });
+    list.sort((a, b) => compareCustomersByCreatedDate(a, b, createdSortDir));
+    return list;
   }, [
     customers,
     customerWonMonthsMap,
@@ -275,6 +282,7 @@ export function CustomersPage({
     statusFilter,
     priorityFilter,
     starredOnly,
+    createdSortDir,
   ]);
 
   const filteredWonGroups = useMemo(() => {
@@ -482,6 +490,15 @@ export function CustomersPage({
           </span>
         ),
       }),
+      columnHelper.accessor((row) => getCustomerCreatedDate(row), {
+        id: 'createdDate',
+        header: 'Ngày tạo',
+        cell: (info) => (
+          <span className="font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap">
+            {formatDateShort(info.getValue())}
+          </span>
+        ),
+      }),
       columnHelper.display({
         id: 'actions',
         header: '',
@@ -542,13 +559,28 @@ export function CustomersPage({
   );
 
   const handleBulkStatus = async (status: CustomerStatus) => {
-    if (!workspace || selectedIds.length === 0) return;
+    if (!workspace || !user || selectedIds.length === 0) return;
     setBulkLoading(true);
     try {
-      await bulkUpdateCustomerStatus(workspace.id, selectedIds, status, selectedCustomers);
-      toast.success(
-        `Đã chuyển ${selectedIds.length} khách hàng sang "${CUSTOMER_STATUS_META[status].label}"`
+      const result = await bulkUpdateCustomerStatus(
+        workspace.id,
+        selectedIds,
+        status,
+        selectedCustomers,
+        {
+          ownerId: user.uid,
+          existingOrders: orders,
+        }
       );
+      if (result.autoOrdersCreated > 0) {
+        toast.success(
+          `Đã chuyển ${selectedIds.length} khách sang "${CUSTOMER_STATUS_META[status].label}" & tự động tạo ${result.autoOrdersCreated} đơn hàng`
+        );
+      } else {
+        toast.success(
+          `Đã chuyển ${selectedIds.length} khách hàng sang "${CUSTOMER_STATUS_META[status].label}"`
+        );
+      }
       setRowSelection({});
     } catch {
       toast.error('Không thể cập nhật hàng loạt.');
@@ -746,6 +778,28 @@ export function CustomersPage({
               <option value="medium">Trung bình</option>
               <option value="low">Thấp</option>
             </SelectField>
+
+            <Button
+              type="button"
+              variant="outline"
+              size="default"
+              onClick={() => {
+                setCreatedSortDir((prev) => (prev === 'desc' ? 'asc' : 'desc'));
+                setSorting([]);
+                setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+              }}
+              className="col-span-2 sm:col-span-1 h-11 sm:h-10 gap-1.5 whitespace-nowrap"
+              title="Đổi chiều sắp xếp theo ngày tạo khách hàng"
+            >
+              {createdSortDir === 'desc' ? (
+                <ArrowDown className="h-3.5 w-3.5 text-primary" />
+              ) : (
+                <ArrowUp className="h-3.5 w-3.5 text-primary" />
+              )}
+              <span>
+                {createdSortDir === 'desc' ? 'Ngày tạo: Mới nhất' : 'Ngày tạo: Cũ nhất'}
+              </span>
+            </Button>
 
             <Button
               type="button"
@@ -1347,11 +1401,14 @@ export function CustomersPage({
                             {[c.position, c.company].filter(Boolean).join(' · ')}
                           </p>
                         )}
-                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
                           <StatusBadge status={c.status} compact />
+                          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                            · Tạo {formatDateShort(getCustomerCreatedDate(c))}
+                          </span>
                           {c.estimatedValue > 0 && (
                             <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                              {formatCurrencyVnd(c.estimatedValue)}
+                              · {formatCurrencyVnd(c.estimatedValue)}
                             </span>
                           )}
                         </div>

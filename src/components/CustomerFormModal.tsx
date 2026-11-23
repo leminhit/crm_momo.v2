@@ -20,7 +20,7 @@ import { Switch } from './ui/switch';
 import { Textarea } from './ui/textarea';
 import { useCrm } from '../contexts/CrmContext';
 import { createCustomer, updateCustomer } from '../lib/crm-service';
-import { getTodayDateString } from '../lib/payroll';
+import { getCustomerCreatedDate, getTodayDateString } from '../lib/payroll';
 import { getMapsHref } from '../lib/utils';
 import {
   CRM_LIMITS,
@@ -54,7 +54,7 @@ export function CustomerFormModal({
   editingCustomer,
   onSaved,
 }: CustomerFormModalProps) {
-  const { ensureWorkspaceReady } = useCrm();
+  const { orders, ensureWorkspaceReady } = useCrm();
   const isEditing = Boolean(editingCustomer);
   const [locatingGps, setLocatingGps] = useState(false);
 
@@ -79,6 +79,7 @@ export function CustomerFormModal({
       isStarred: false,
       soldAt: '',
       machineCount: 1,
+      createdDate: getTodayDateString(),
     },
   });
 
@@ -124,6 +125,7 @@ export function CustomerFormModal({
           (editingCustomer.status === 'won' ? getTodayDateString() : ''),
         machineCount:
           editingCustomer.machineCount >= 1 ? editingCustomer.machineCount : 1,
+        createdDate: getCustomerCreatedDate(editingCustomer),
       });
     } else {
       reset({
@@ -144,6 +146,7 @@ export function CustomerFormModal({
         isStarred: false,
         soldAt: '',
         machineCount: 1,
+        createdDate: getTodayDateString(),
       });
     }
   }, [open, editingCustomer, reset]);
@@ -223,6 +226,10 @@ export function CustomerFormModal({
         ? Math.max(1, Math.floor(Number(values.machineCount) || 1))
         : Math.max(0, Math.floor(Number(values.machineCount) || 1));
 
+    const resolvedCreatedDate =
+      values.createdDate?.trim() ||
+      (editingCustomer ? getCustomerCreatedDate(editingCustomer) : getTodayDateString());
+
     const payload = isEditing
       ? {
           fullName: values.fullName,
@@ -242,6 +249,7 @@ export function CustomerFormModal({
           isStarred: values.isStarred,
           soldAt: resolvedSoldAt,
           machineCount: resolvedMachineCount,
+          createdDate: resolvedCreatedDate,
         }
       : {
           fullName: values.fullName,
@@ -261,23 +269,53 @@ export function CustomerFormModal({
           isStarred: values.isStarred,
           soldAt: resolvedSoldAt,
           machineCount: resolvedMachineCount,
+          createdDate: getTodayDateString(),
         };
 
     try {
       const session = await ensureWorkspaceReady();
       if (editingCustomer) {
-        await updateCustomer(
+        const result = await updateCustomer(
           session.workspaceId,
           editingCustomer.id,
           editingCustomer.assignedTo || session.uid,
-          payload
+          payload,
+          {
+            ownerId: session.uid,
+            existingCustomer: editingCustomer,
+            existingOrders: orders,
+          }
         );
-        toast.success(`Đã cập nhật khách hàng ${values.fullName}`);
+        if (result.autoOrderCode) {
+          toast.success(
+            `Đã cập nhật ${values.fullName} & tự động tạo đơn ${result.autoOrderCode}`
+          );
+        } else {
+          toast.success(`Đã cập nhật khách hàng ${values.fullName}`);
+        }
         onOpenChange(false);
         onSaved?.(editingCustomer.id);
       } else {
-        const newId = await createCustomer(session.workspaceId, session.uid, payload);
-        toast.success(`Đã thêm khách hàng ${values.fullName}`);
+        let autoOrderCode = '';
+        const newId = await createCustomer(
+          session.workspaceId,
+          session.uid,
+          payload,
+          undefined,
+          {
+            existingOrders: orders,
+            onAutoOrderCreated: (code) => {
+              autoOrderCode = code;
+            },
+          }
+        );
+        if (autoOrderCode) {
+          toast.success(
+            `Đã thêm ${values.fullName} & tự động tạo đơn ${autoOrderCode}`
+          );
+        } else {
+          toast.success(`Đã thêm khách hàng ${values.fullName}`);
+        }
         onOpenChange(false);
         onSaved?.(newId);
       }
@@ -587,6 +625,16 @@ export function CustomerFormModal({
             </div>
 
             <div className="space-y-1.5">
+              <Label htmlFor="crm-createdDate">Ngày tạo khách</Label>
+              <Input
+                id="crm-createdDate"
+                type="date"
+                className="font-mono tabular-nums"
+                {...register('createdDate')}
+              />
+            </div>
+
+            <div className="space-y-1.5 sm:col-span-3">
               <Label htmlFor="crm-email">Email</Label>
               <Input
                 id="crm-email"

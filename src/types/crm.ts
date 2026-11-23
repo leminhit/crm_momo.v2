@@ -41,6 +41,7 @@ export interface CustomerRecord {
   isStarred: boolean;
   soldAt: string;
   machineCount: number;
+  createdDate: string;
   createdAt: Date | null;
   updatedAt: Date | null;
 }
@@ -67,6 +68,7 @@ export interface CustomerFirestoreDoc {
   isStarred: boolean;
   soldAt?: string;
   machineCount?: number;
+  createdDate?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }

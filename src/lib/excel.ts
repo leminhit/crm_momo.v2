@@ -1,6 +1,10 @@
 import { format } from 'date-fns';
 import type { CustomerInputPayload } from './crm-service';
-import { getCustomerMachineCount } from './payroll';
+import {
+  formatDateShort,
+  getCustomerCreatedDate,
+  getCustomerMachineCount,
+} from './payroll';
 import {
   CUSTOMER_PRIORITY_META,
   CUSTOMER_STATUS_META,
@@ -41,7 +45,7 @@ export async function exportCustomersToExcel(
       'Hẹn chăm sóc': c.nextFollowUpAt,
       'Ghi chú': c.quickNote,
       'Đánh dấu sao': c.isStarred ? 'Có' : 'Không',
-      'Ngày tạo': c.createdAt ? format(c.createdAt, 'dd/MM/yyyy HH:mm') : '',
+      'Ngày tạo': formatDateShort(getCustomerCreatedDate(c)),
       'Cập nhật': c.updatedAt ? format(c.updatedAt, 'dd/MM/yyyy HH:mm') : '',
     };
   });
@@ -193,6 +197,10 @@ export async function parseExcelCustomersFile(
     );
     const parsedStatus = mapVietnameseStatus(String(row['Trạng thái'] ?? 'lead'));
     const rawSoldAt = String(row['Ngày bán'] ?? row['soldAt'] ?? '').trim();
+    const rawCreatedDate = String(row['Ngày tạo'] ?? row['createdDate'] ?? '').trim();
+    const normalizedCreatedDate = /^\d{4}-\d{2}-\d{2}/.test(rawCreatedDate)
+      ? rawCreatedDate.slice(0, 10)
+      : '';
 
     results.push({
       fullName,
@@ -217,6 +225,7 @@ export async function parseExcelCustomersFile(
         Number.isFinite(rawMachines) && rawMachines >= 1
           ? Math.min(1000, Math.floor(rawMachines))
           : 1,
+      createdDate: normalizedCreatedDate,
     });
   }
 

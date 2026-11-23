@@ -223,6 +223,11 @@
           "type": "number",
           "description": "Number of speakers / stores purchased by this customer."
         },
+        "createdDate": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Editable customer creation date (YYYY-MM-DD) used for chronological sorting."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"

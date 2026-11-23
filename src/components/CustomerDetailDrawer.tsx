@@ -37,6 +37,7 @@ import {
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import {
   formatDateShort,
+  getCustomerCreatedDate,
   getCustomerMachineCount,
   getCustomerSaleDate,
 } from '../lib/payroll';
@@ -136,10 +137,25 @@ export function CustomerDetailDrawer({
   };
 
   const handleStatusChange = async (nextStatus: CustomerStatus) => {
-    if (!workspace) return;
+    if (!workspace || !user) return;
     try {
-      await updateCustomerStatus(workspace.id, customer.id, nextStatus, customer);
-      toast.success(`Đã chuyển trạng thái sang ${CUSTOMER_STATUS_META[nextStatus].label}`);
+      const result = await updateCustomerStatus(
+        workspace.id,
+        customer.id,
+        nextStatus,
+        customer,
+        {
+          ownerId: user.uid,
+          existingOrders: orders,
+        }
+      );
+      if (result.autoOrderCode) {
+        toast.success(
+          `Đã chuyển sang Đã bán & tự động tạo đơn ${result.autoOrderCode}`
+        );
+      } else {
+        toast.success(`Đã chuyển trạng thái sang ${CUSTOMER_STATUS_META[nextStatus].label}`);
+      }
     } catch {
       toast.error('Không thể cập nhật trạng thái.');
     }
@@ -357,6 +373,9 @@ export function CustomerDetailDrawer({
                   );
                 })()
               )}
+              <span className="font-mono tabular-nums">
+                Ngày tạo: {formatDateShort(getCustomerCreatedDate(customer))}
+              </span>
               {customer.source && <span>Nguồn: {customer.source}</span>}
               {customer.nextFollowUpAt && (
                 <span className="inline-flex items-center gap-1 text-foreground font-medium">

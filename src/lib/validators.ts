@@ -20,6 +20,7 @@ export const CRM_LIMITS = {
   QUICK_NOTE_MAX: 2000,
   NEXT_FOLLOWUP_MAX: 32,
   SOLD_AT_MAX: 32,
+  CREATED_DATE_MAX: 32,
   MACHINE_COUNT_MAX: 1000,
   ORDER_CODE_MAX: 60,
   ORDER_NOTE_MAX: 1000,
@@ -118,6 +119,11 @@ export const customerFormSchema = z.object({
     .min(0, 'Số lượng loa không thể âm')
     .max(CRM_LIMITS.MACHINE_COUNT_MAX, `Tối đa ${CRM_LIMITS.MACHINE_COUNT_MAX} loa`)
     .default(1),
+  createdDate: z
+    .string()
+    .trim()
+    .max(CRM_LIMITS.CREATED_DATE_MAX)
+    .default(''),
 });
 
 export type CustomerFormValues = z.infer<typeof customerFormSchema>;

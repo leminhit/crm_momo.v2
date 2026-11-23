@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react';
 import {
   Edit3,
+  Loader2,
   MapPin,
   MessageCircle,
   Phone,
   Plus,
+  RefreshCw,
   Search,
   ShoppingBag,
   Trash2,
@@ -17,7 +19,13 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Skeleton } from '../components/ui/skeleton';
 import { useCrm } from '../contexts/CrmContext';
-import { deleteOrder } from '../lib/crm-service';
+import {
+  backfillOrdersFromWonCustomers,
+  deleteOrder,
+  getSkippedBackfillCustomerIds,
+  getUnsyncedWonCustomers,
+  markCustomerSkippedFromBackfill,
+} from '../lib/crm-service';
 import {
   formatDateShort,
   formatMonthLabel,
@@ -36,7 +44,7 @@ interface OrdersPageProps {
 }
 
 export function OrdersPage({ onSelectCustomer }: OrdersPageProps) {
-  const { customers, orders, workspace, loadingData } = useCrm();
+  const { user, customers, orders, workspace, loadingData } = useCrm();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
@@ -44,6 +52,7 @@ export function OrdersPage({ onSelectCustomer }: OrdersPageProps) {
   const [editingOrder, setEditingOrder] = useState<OrderRecord | null>(null);
   const [deletingOrder, setDeletingOrder] = useState<OrderRecord | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [syncingWonOrders, setSyncingWonOrders] = useState(false);
 
   const customerMap = useMemo(
     () => new Map(customers.map((c) => [c.id, c])),
@@ -106,6 +115,62 @@ export function OrdersPage({ onSelectCustomer }: OrdersPageProps) {
     [filteredOrders]
   );
 
+  const groupedOrdersByMonth = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        monthKey: string;
+        label: string;
+        orders: OrderRecord[];
+        orderCount: number;
+        machineCount: number;
+      }
+    >();
+
+    for (const ord of filteredOrders) {
+      const { monthKey } = getOrderSaleDate(ord);
+      const machines = getOrderMachineCount(ord);
+      const existing = map.get(monthKey);
+      if (existing) {
+        existing.orders.push(ord);
+        existing.orderCount += 1;
+        existing.machineCount += machines;
+      } else {
+        map.set(monthKey, {
+          monthKey,
+          label: formatMonthLabel(monthKey),
+          orders: [ord],
+          orderCount: 1,
+          machineCount: machines,
+        });
+      }
+    }
+
+    const groups = Array.from(map.values()).sort((a, b) =>
+      b.monthKey.localeCompare(a.monthKey)
+    );
+    for (const group of groups) {
+      group.orders.sort((a, b) => {
+        const sa = getOrderSaleDate(a).dateStr;
+        const sb = getOrderSaleDate(b).dateStr;
+        if (sa !== sb) return sb.localeCompare(sa);
+        const ta = a.createdAt ? a.createdAt.getTime() : 0;
+        const tb = b.createdAt ? b.createdAt.getTime() : 0;
+        return tb - ta;
+      });
+    }
+    return groups;
+  }, [filteredOrders]);
+
+  const unsyncedWonCount = useMemo(() => {
+    if (!workspace) return 0;
+    return getUnsyncedWonCustomers(
+      customers,
+      orders,
+      getSkippedBackfillCustomerIds(workspace.id)
+    ).length;
+  }, [workspace, customers, orders]);
+
   const handleOpenCreateOrder = () => {
     setEditingOrder(null);
     setOrderModalOpen(true);
@@ -116,11 +181,39 @@ export function OrdersPage({ onSelectCustomer }: OrdersPageProps) {
     setOrderModalOpen(true);
   };
 
+  const handleSyncWonCustomers = async () => {
+    if (!workspace || !user || unsyncedWonCount === 0) return;
+    setSyncingWonOrders(true);
+    try {
+      const result = await backfillOrdersFromWonCustomers(
+        workspace.id,
+        user.uid,
+        customers,
+        orders,
+        { skipCustomerIds: getSkippedBackfillCustomerIds(workspace.id) }
+      );
+      if (result.created > 0) {
+        toast.success(
+          `Đã tạo ${result.created} đơn hàng từ khách Đã bán và phân theo ${result.monthCount} tháng`
+        );
+      } else {
+        toast.info('Tất cả khách Đã bán đều đã có đơn hàng.');
+      }
+    } catch {
+      toast.error('Không thể đồng bộ đơn hàng từ khách Đã bán.');
+    } finally {
+      setSyncingWonOrders(false);
+    }
+  };
+
   const handleConfirmDelete = async () => {
     if (!workspace || !deletingOrder) return;
     setDeleteLoading(true);
     try {
       await deleteOrder(workspace.id, deletingOrder.id);
+      if (deletingOrder.customerId) {
+        markCustomerSkippedFromBackfill(workspace.id, deletingOrder.customerId);
+      }
       toast.success(`Đã xóa đơn hàng ${deletingOrder.orderCode}`);
       setDeletingOrder(null);
     } catch {
@@ -168,14 +261,32 @@ export function OrdersPage({ onSelectCustomer }: OrdersPageProps) {
             )}
           </div>
 
-          <Button
-            type="button"
-            onClick={handleOpenCreateOrder}
-            className="h-11 sm:h-10 shrink-0 whitespace-nowrap"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Tạo đơn</span>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {unsyncedWonCount > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleSyncWonCustomers}
+                disabled={syncingWonOrders}
+                className="h-11 sm:h-10 shrink-0 whitespace-nowrap"
+              >
+                {syncingWonOrders ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                <span>Đồng bộ {unsyncedWonCount} khách Đã bán</span>
+              </Button>
+            )}
+            <Button
+              type="button"
+              onClick={handleOpenCreateOrder}
+              className="h-11 sm:h-10 shrink-0 whitespace-nowrap flex-1 sm:flex-initial"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Tạo đơn</span>
+            </Button>
+          </div>
         </div>
 
         {/* Month Tabs */}
@@ -261,282 +372,299 @@ export function OrdersPage({ onSelectCustomer }: OrdersPageProps) {
           </Button>
         </div>
       ) : (
-        <>
-          {/* Mobile Cards */}
-          <div className="grid grid-cols-1 gap-3 md:hidden">
-            {filteredOrders.map((ord) => {
-              const cust = customerMap.get(ord.customerId) ?? null;
-              const displayName = cust?.fullName || ord.customerName;
-              const phone = cust
-                ? (cust.phones.find((p) => p.isPrimary) ?? cust.phones[0])?.number ?? ''
-                : ord.customerPhone;
-              const dial = phone ? normalizePhoneForDial(phone) : '';
-              const zalo = phone ? getZaloUrl(phone) : '';
-              const mapsHref = getMapsHref(ord.googleMapsUrl, ord.address);
-              const saleInfo = getOrderSaleDate(ord);
-              const machines = getOrderMachineCount(ord);
+        <div className="space-y-6">
+          {groupedOrdersByMonth.map((group) => (
+            <section key={group.monthKey} className="space-y-3">
+              {/* Monthly Section Header */}
+              <div className="flex items-center justify-between gap-3 border-b border-border pb-2">
+                <h2 className="text-sm font-semibold text-foreground">
+                  {group.label}
+                </h2>
+                <p className="text-xs font-mono tabular-nums text-muted-foreground">
+                  {group.orderCount} đơn ·{' '}
+                  <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                    {group.machineCount} loa
+                  </span>
+                </p>
+              </div>
 
-              return (
-                <article
-                  key={ord.id}
-                  className="min-w-0 rounded-xl border border-border bg-card p-3.5 space-y-3"
-                >
-                  <div className="flex items-start justify-between gap-2.5">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-mono tabular-nums text-muted-foreground">
-                        <span className="font-semibold text-primary">
-                          {ord.orderCode}
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <span>{formatDateShort(saleInfo.dateStr)}</span>
-                        <span aria-hidden="true">·</span>
-                        <span className="text-emerald-700 dark:text-emerald-400 font-medium">
-                          {machines} loa
-                        </span>
-                      </div>
-                      {cust ? (
-                        <button
-                          type="button"
-                          onClick={() => onSelectCustomer(cust)}
-                          className="mt-1 text-left text-sm font-semibold text-foreground hover:text-primary transition-colors truncate block w-full cursor-pointer"
-                        >
-                          {displayName}
-                        </button>
-                      ) : (
-                        <p className="mt-1 text-sm font-semibold text-foreground truncate">
-                          {displayName}
-                        </p>
-                      )}
-                      {phone && (
-                        <p className="text-xs font-mono tabular-nums text-muted-foreground">
-                          {phone}
-                        </p>
-                      )}
-                    </div>
+              {/* Mobile Cards for this Month */}
+              <div className="grid grid-cols-1 gap-3 md:hidden">
+                {group.orders.map((ord) => {
+                  const cust = customerMap.get(ord.customerId) ?? null;
+                  const displayName = cust?.fullName || ord.customerName;
+                  const phone = cust
+                    ? (cust.phones.find((p) => p.isPrimary) ?? cust.phones[0])?.number ?? ''
+                    : ord.customerPhone;
+                  const dial = phone ? normalizePhoneForDial(phone) : '';
+                  const zalo = phone ? getZaloUrl(phone) : '';
+                  const mapsHref = getMapsHref(ord.googleMapsUrl, ord.address);
+                  const saleInfo = getOrderSaleDate(ord);
+                  const machines = getOrderMachineCount(ord);
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => handleOpenEditOrder(ord)}
-                        aria-label={`Sửa đơn ${ord.orderCode}`}
-                      >
-                        <Edit3 className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => setDeletingOrder(ord)}
-                        aria-label={`Xóa đơn ${ord.orderCode}`}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  {(ord.address || ord.note) && (
-                    <div className="space-y-1 text-xs text-muted-foreground">
-                      {ord.address && <p className="break-words">{ord.address}</p>}
-                      {ord.note && (
-                        <p className="text-foreground/90 whitespace-pre-wrap leading-relaxed">
-                          {ord.note}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-border">
-                    {dial ? (
-                      <a
-                        href={`tel:${dial}`}
-                        className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/40 text-xs font-medium text-foreground hover:bg-muted transition-colors"
-                      >
-                        <Phone className="h-3.5 w-3.5 text-primary" />
-                        <span>Gọi</span>
-                      </a>
-                    ) : (
-                      <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
-                        —
-                      </span>
-                    )}
-
-                    {zalo ? (
-                      <a
-                        href={zalo}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg bg-sky-600/10 text-xs font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-600/20 transition-colors"
-                      >
-                        <MessageCircle className="h-3.5 w-3.5" />
-                        <span>Zalo</span>
-                      </a>
-                    ) : (
-                      <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
-                        —
-                      </span>
-                    )}
-
-                    {mapsHref ? (
-                      <a
-                        href={mapsHref}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/40 text-xs font-medium text-foreground hover:bg-muted transition-colors"
-                      >
-                        <MapPin className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                        <span>Maps</span>
-                      </a>
-                    ) : (
-                      <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
-                        —
-                      </span>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-
-          {/* Desktop Table */}
-          <div className="hidden md:block rounded-xl border border-border bg-card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-left text-sm">
-                <thead className="border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
-                  <tr>
-                    <th className="px-4 py-3 whitespace-nowrap">Mã đơn</th>
-                    <th className="px-4 py-3 whitespace-nowrap">Ngày bán</th>
-                    <th className="px-4 py-3 whitespace-nowrap">Khách hàng</th>
-                    <th className="px-4 py-3 whitespace-nowrap">Địa chỉ &amp; Định vị</th>
-                    <th className="px-4 py-3 whitespace-nowrap">Ghi chú đơn</th>
-                    <th className="px-4 py-3 whitespace-nowrap text-right">Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {filteredOrders.map((ord) => {
-                    const cust = customerMap.get(ord.customerId) ?? null;
-                    const displayName = cust?.fullName || ord.customerName;
-                    const phone = cust
-                      ? (cust.phones.find((p) => p.isPrimary) ?? cust.phones[0])?.number ?? ''
-                      : ord.customerPhone;
-                    const dial = phone ? normalizePhoneForDial(phone) : '';
-                    const zalo = phone ? getZaloUrl(phone) : '';
-                    const mapsHref = getMapsHref(ord.googleMapsUrl, ord.address);
-                    const saleInfo = getOrderSaleDate(ord);
-                    const machines = getOrderMachineCount(ord);
-
-                    return (
-                      <tr key={ord.id} className="hover:bg-muted/35 transition-colors">
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <p className="font-mono text-xs font-semibold text-primary tabular-nums">
-                            {ord.orderCode}
-                          </p>
-                          <p className="font-mono text-[11px] text-emerald-700 dark:text-emerald-400 tabular-nums">
-                            {machines} loa
-                          </p>
-                        </td>
-                        <td className="px-4 py-3 whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground">
-                          {formatDateShort(saleInfo.dateStr)}
-                        </td>
-                        <td className="px-4 py-3 min-w-[200px]">
+                  return (
+                    <article
+                      key={ord.id}
+                      className="min-w-0 rounded-xl border border-border bg-card p-3.5 space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-2.5">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-mono tabular-nums text-muted-foreground">
+                            <span className="font-semibold text-primary">
+                              {ord.orderCode}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>{formatDateShort(saleInfo.dateStr)}</span>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-emerald-700 dark:text-emerald-400 font-medium">
+                              {machines} loa
+                            </span>
+                          </div>
                           {cust ? (
                             <button
                               type="button"
                               onClick={() => onSelectCustomer(cust)}
-                              className="text-left group cursor-pointer"
+                              className="mt-1 text-left text-sm font-semibold text-foreground hover:text-primary transition-colors truncate block w-full cursor-pointer"
                             >
-                              <p className="font-medium text-foreground group-hover:text-primary transition-colors">
-                                {displayName}
-                              </p>
+                              {displayName}
                             </button>
                           ) : (
-                            <p className="font-medium text-foreground">{displayName}</p>
+                            <p className="mt-1 text-sm font-semibold text-foreground truncate">
+                              {displayName}
+                            </p>
                           )}
-                          <div className="mt-0.5 flex items-center gap-2">
-                            <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                              {phone || '—'}
-                            </span>
-                            {dial && (
-                              <a
-                                href={`tel:${dial}`}
-                                title={`Gọi ${phone}`}
-                                className="text-primary hover:underline text-xs"
-                              >
-                                Gọi
-                              </a>
-                            )}
-                            {zalo && (
-                              <a
-                                href={zalo}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sky-600 dark:text-sky-400 hover:underline text-xs"
-                              >
-                                Zalo
-                              </a>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 max-w-[240px]">
-                          {mapsHref ? (
-                            <a
-                              href={mapsHref}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline truncate max-w-full"
-                              title={ord.address || ord.googleMapsUrl}
-                            >
-                              <MapPin className="h-3.5 w-3.5 shrink-0" />
-                              <span className="truncate">
-                                {ord.address || 'Mở Google Maps'}
-                              </span>
-                            </a>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">
-                              {ord.address || '—'}
-                            </span>
+                          {phone && (
+                            <p className="text-xs font-mono tabular-nums text-muted-foreground">
+                              {phone}
+                            </p>
                           )}
-                        </td>
-                        <td className="px-4 py-3 max-w-[240px]">
-                          <p className="text-xs text-muted-foreground line-clamp-2">
-                            {ord.note || '—'}
-                          </p>
-                        </td>
-                        <td className="px-4 py-3 text-right whitespace-nowrap">
-                          <div className="inline-flex items-center gap-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-sm"
-                              onClick={() => handleOpenEditOrder(ord)}
-                              title="Chỉnh sửa đơn hàng"
-                              aria-label={`Sửa ${ord.orderCode}`}
-                            >
-                              <Edit3 className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-sm"
-                              onClick={() => setDeletingOrder(ord)}
-                              title="Xóa đơn hàng"
-                              aria-label={`Xóa ${ord.orderCode}`}
-                              className="text-muted-foreground hover:text-destructive"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </td>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => handleOpenEditOrder(ord)}
+                            aria-label={`Sửa đơn ${ord.orderCode}`}
+                          >
+                            <Edit3 className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => setDeletingOrder(ord)}
+                            aria-label={`Xóa đơn ${ord.orderCode}`}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {(ord.address || ord.note) && (
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          {ord.address && <p className="break-words">{ord.address}</p>}
+                          {ord.note && (
+                            <p className="text-foreground/90 whitespace-pre-wrap leading-relaxed">
+                              {ord.note}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-border">
+                        {dial ? (
+                          <a
+                            href={`tel:${dial}`}
+                            className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/40 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+                          >
+                            <Phone className="h-3.5 w-3.5 text-primary" />
+                            <span>Gọi</span>
+                          </a>
+                        ) : (
+                          <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
+                            —
+                          </span>
+                        )}
+
+                        {zalo ? (
+                          <a
+                            href={zalo}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg bg-sky-600/10 text-xs font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-600/20 transition-colors"
+                          >
+                            <MessageCircle className="h-3.5 w-3.5" />
+                            <span>Zalo</span>
+                          </a>
+                        ) : (
+                          <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
+                            —
+                          </span>
+                        )}
+
+                        {mapsHref ? (
+                          <a
+                            href={mapsHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/40 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+                          >
+                            <MapPin className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                            <span>Maps</span>
+                          </a>
+                        ) : (
+                          <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
+                            —
+                          </span>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+
+              {/* Desktop Table for this Month */}
+              <div className="hidden md:block rounded-xl border border-border bg-card overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-left text-sm">
+                    <thead className="border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
+                      <tr>
+                        <th className="px-4 py-3 whitespace-nowrap">Mã đơn</th>
+                        <th className="px-4 py-3 whitespace-nowrap">Ngày bán</th>
+                        <th className="px-4 py-3 whitespace-nowrap">Khách hàng</th>
+                        <th className="px-4 py-3 whitespace-nowrap">Địa chỉ &amp; Định vị</th>
+                        <th className="px-4 py-3 whitespace-nowrap">Ghi chú đơn</th>
+                        <th className="px-4 py-3 whitespace-nowrap text-right">Thao tác</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {group.orders.map((ord) => {
+                        const cust = customerMap.get(ord.customerId) ?? null;
+                        const displayName = cust?.fullName || ord.customerName;
+                        const phone = cust
+                          ? (cust.phones.find((p) => p.isPrimary) ?? cust.phones[0])?.number ?? ''
+                          : ord.customerPhone;
+                        const dial = phone ? normalizePhoneForDial(phone) : '';
+                        const zalo = phone ? getZaloUrl(phone) : '';
+                        const mapsHref = getMapsHref(ord.googleMapsUrl, ord.address);
+                        const saleInfo = getOrderSaleDate(ord);
+                        const machines = getOrderMachineCount(ord);
+
+                        return (
+                          <tr key={ord.id} className="hover:bg-muted/35 transition-colors">
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <p className="font-mono text-xs font-semibold text-primary tabular-nums">
+                                {ord.orderCode}
+                              </p>
+                              <p className="font-mono text-[11px] text-emerald-700 dark:text-emerald-400 tabular-nums">
+                                {machines} loa
+                              </p>
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground">
+                              {formatDateShort(saleInfo.dateStr)}
+                            </td>
+                            <td className="px-4 py-3 min-w-[200px]">
+                              {cust ? (
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectCustomer(cust)}
+                                  className="text-left group cursor-pointer"
+                                >
+                                  <p className="font-medium text-foreground group-hover:text-primary transition-colors">
+                                    {displayName}
+                                  </p>
+                                </button>
+                              ) : (
+                                <p className="font-medium text-foreground">{displayName}</p>
+                              )}
+                              <div className="mt-0.5 flex items-center gap-2">
+                                <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                                  {phone || '—'}
+                                </span>
+                                {dial && (
+                                  <a
+                                    href={`tel:${dial}`}
+                                    title={`Gọi ${phone}`}
+                                    className="text-primary hover:underline text-xs"
+                                  >
+                                    Gọi
+                                  </a>
+                                )}
+                                {zalo && (
+                                  <a
+                                    href={zalo}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-sky-600 dark:text-sky-400 hover:underline text-xs"
+                                  >
+                                    Zalo
+                                  </a>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 max-w-[240px]">
+                              {mapsHref ? (
+                                <a
+                                  href={mapsHref}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline truncate max-w-full"
+                                  title={ord.address || ord.googleMapsUrl}
+                                >
+                                  <MapPin className="h-3.5 w-3.5 shrink-0" />
+                                  <span className="truncate">
+                                    {ord.address || 'Mở Google Maps'}
+                                  </span>
+                                </a>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">
+                                  {ord.address || '—'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 max-w-[240px]">
+                              <p className="text-xs text-muted-foreground line-clamp-2">
+                                {ord.note || '—'}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                              <div className="inline-flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  onClick={() => handleOpenEditOrder(ord)}
+                                  title="Chỉnh sửa đơn hàng"
+                                  aria-label={`Sửa ${ord.orderCode}`}
+                                >
+                                  <Edit3 className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  onClick={() => setDeletingOrder(ord)}
+                                  title="Xóa đơn hàng"
+                                  aria-label={`Xóa ${ord.orderCode}`}
+                                  className="text-muted-foreground hover:text-destructive"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+          ))}
+        </div>
       )}
 
       {/* Create / Edit Order Modal (exclusively inside Orders tab) */}

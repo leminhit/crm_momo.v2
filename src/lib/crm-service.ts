@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  getDocsFromServer,
   query,
   serverTimestamp,
   setDoc,
@@ -14,7 +15,11 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase';
-import { getTodayDateString } from './payroll';
+import {
+  generateSuggestedOrderCode,
+  getCustomerCreatedDate,
+  getTodayDateString,
+} from './payroll';
 import { generateFirestoreId } from './utils';
 import { CRM_LIMITS } from './validators';
 import type {
@@ -74,6 +79,7 @@ export function mapCustomerDoc(id: string, data: Record<string, unknown>): Custo
       typeof data.machineCount === 'number' && Number.isFinite(data.machineCount)
         ? Math.max(0, Math.floor(data.machineCount))
         : 1,
+    createdDate: typeof data.createdDate === 'string' ? data.createdDate : '',
     createdAt: toDateOrNull(data.createdAt),
     updatedAt: toDateOrNull(data.updatedAt),
   };
@@ -313,6 +319,7 @@ export interface CustomerInputPayload {
   isStarred: boolean;
   soldAt?: string;
   machineCount?: number;
+  createdDate?: string;
 }
 
 function sanitizePhones(phones: PhoneEntry[]): PhoneEntry[] {
@@ -340,7 +347,10 @@ function sanitizePhones(phones: PhoneEntry[]): PhoneEntry[] {
   }));
 }
 
-function sanitizeCustomerFields(input: CustomerInputPayload) {
+function sanitizeCustomerFields(
+  input: CustomerInputPayload,
+  fallbackCreatedDate: string = getTodayDateString()
+) {
   const cleanSoldAt = (input.soldAt ?? '').trim().slice(0, CRM_LIMITS.SOLD_AT_MAX);
   const resolvedSoldAt =
     input.status === 'won' ? cleanSoldAt || getTodayDateString() : cleanSoldAt;
@@ -350,6 +360,10 @@ function sanitizeCustomerFields(input: CustomerInputPayload) {
       : 1;
   const resolvedMachineCount =
     input.status === 'won' ? Math.max(1, rawMachineCount) : rawMachineCount;
+  const cleanCreatedDate = (input.createdDate ?? '')
+    .trim()
+    .slice(0, CRM_LIMITS.CREATED_DATE_MAX);
+  const resolvedCreatedDate = cleanCreatedDate || fallbackCreatedDate;
 
   return {
     fullName: input.fullName.trim().slice(0, CRM_LIMITS.FULL_NAME_MAX),
@@ -372,6 +386,243 @@ function sanitizeCustomerFields(input: CustomerInputPayload) {
     isStarred: Boolean(input.isStarred),
     soldAt: resolvedSoldAt,
     machineCount: resolvedMachineCount,
+    createdDate: resolvedCreatedDate,
+  };
+}
+
+const SKIP_BACKFILL_KEY_PREFIX = 'crm_skip_auto_backfill_v1_';
+
+export function getSkippedBackfillCustomerIds(workspaceId: string): Set<string> {
+  if (!workspaceId || typeof window === 'undefined') return new Set();
+  try {
+    const raw = localStorage.getItem(`${SKIP_BACKFILL_KEY_PREFIX}${workspaceId}`);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.map((item) => String(item))) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function markCustomerSkippedFromBackfill(
+  workspaceId: string,
+  customerId: string
+): void {
+  if (!workspaceId || !customerId || typeof window === 'undefined') return;
+  try {
+    const next = getSkippedBackfillCustomerIds(workspaceId);
+    next.add(customerId);
+    localStorage.setItem(
+      `${SKIP_BACKFILL_KEY_PREFIX}${workspaceId}`,
+      JSON.stringify(Array.from(next))
+    );
+  } catch {
+    // Ignore storage quota or private browsing errors
+  }
+}
+
+export function unmarkCustomerSkippedFromBackfill(
+  workspaceId: string,
+  customerId: string
+): void {
+  if (!workspaceId || !customerId || typeof window === 'undefined') return;
+  try {
+    const next = getSkippedBackfillCustomerIds(workspaceId);
+    if (!next.has(customerId)) return;
+    next.delete(customerId);
+    localStorage.setItem(
+      `${SKIP_BACKFILL_KEY_PREFIX}${workspaceId}`,
+      JSON.stringify(Array.from(next))
+    );
+  } catch {
+    // Ignore storage quota or private browsing errors
+  }
+}
+
+export function resolveCustomerBackfillSoldAt(customer: CustomerRecord): string {
+  const rawSoldAt = (customer.soldAt ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(rawSoldAt)) {
+    return rawSoldAt.slice(0, 10);
+  }
+  if (/^\d{4}-\d{2}$/.test(rawSoldAt)) {
+    return `${rawSoldAt}-01`;
+  }
+  return getCustomerCreatedDate(customer);
+}
+
+export function getUnsyncedWonCustomers(
+  customers: CustomerRecord[],
+  existingOrders: Pick<OrderRecord, 'customerId'>[],
+  skipCustomerIds?: Set<string>
+): CustomerRecord[] {
+  const customerIdsWithOrders = new Set(existingOrders.map((o) => o.customerId));
+  return customers.filter(
+    (c) =>
+      c.status === 'won' &&
+      !customerIdsWithOrders.has(c.id) &&
+      !(skipCustomerIds?.has(c.id) ?? false)
+  );
+}
+
+function buildAutoOrderPayload(params: {
+  orderId: string;
+  workspaceId: string;
+  ownerId: string;
+  customerId: string;
+  fullName: string;
+  phones: PhoneEntry[];
+  address: string;
+  googleMapsUrl: string;
+  quickNote: string;
+  soldAt: string;
+  machineCount: number;
+  orderCode: string;
+}) {
+  const primaryPhone =
+    (params.phones.find((p) => p.isPrimary) ?? params.phones[0])?.number ?? '';
+  return {
+    id: params.orderId,
+    workspaceId: params.workspaceId,
+    ownerId: params.ownerId,
+    customerId: params.customerId,
+    customerName:
+      params.fullName.trim().slice(0, CRM_LIMITS.FULL_NAME_MAX) || 'Khách hàng',
+    customerPhone: primaryPhone.trim().slice(0, CRM_LIMITS.PHONE_MAX),
+    orderCode:
+      params.orderCode.trim().slice(0, CRM_LIMITS.ORDER_CODE_MAX) || 'DH-001',
+    address: params.address.trim().slice(0, CRM_LIMITS.ADDRESS_MAX),
+    googleMapsUrl: params.googleMapsUrl.trim().slice(0, CRM_LIMITS.MAPS_URL_MAX),
+    soldAt:
+      params.soldAt.trim().slice(0, CRM_LIMITS.SOLD_AT_MAX) ||
+      getTodayDateString(),
+    note: params.quickNote.trim().slice(0, CRM_LIMITS.ORDER_NOTE_MAX),
+    machineCount: Math.min(
+      CRM_LIMITS.MACHINE_COUNT_MAX,
+      Math.max(1, Math.floor(params.machineCount || 1))
+    ),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+export async function backfillOrdersFromWonCustomers(
+  workspaceId: string,
+  ownerId: string,
+  customers: CustomerRecord[],
+  existingOrders: OrderRecord[],
+  options?: {
+    skipCustomerIds?: Set<string>;
+    verifyFromServer?: boolean;
+  }
+): Promise<{ created: number; monthCount: number }> {
+  const initialEligible = getUnsyncedWonCustomers(
+    customers,
+    existingOrders,
+    options?.skipCustomerIds
+  );
+  if (initialEligible.length === 0) {
+    return { created: 0, monthCount: 0 };
+  }
+
+  let authoritativeOrders = existingOrders;
+  if (options?.verifyFromServer !== false) {
+    try {
+      const serverSnap = await getDocsFromServer(
+        query(
+          collection(db, 'workspaces', workspaceId, 'orders'),
+          where('ownerId', '==', ownerId)
+        )
+      );
+      authoritativeOrders = serverSnap.docs.map((d) => mapOrderDoc(d.id, d.data()));
+    } catch {
+      // If server check fails (e.g. temporarily offline), abort auto-backfill safely to prevent duplicates
+      return { created: 0, monthCount: 0 };
+    }
+  }
+
+  const eligible = getUnsyncedWonCustomers(
+    customers,
+    authoritativeOrders,
+    options?.skipCustomerIds
+  );
+  if (eligible.length === 0) {
+    return { created: 0, monthCount: 0 };
+  }
+
+  // Sort chronologically ascending so monthly order codes (DH-YYMM-001, 002...) increment cleanly
+  const sorted = [...eligible].sort((a, b) => {
+    const da = resolveCustomerBackfillSoldAt(a);
+    const dbDate = resolveCustomerBackfillSoldAt(b);
+    if (da !== dbDate) return da.localeCompare(dbDate);
+    const ta = a.createdAt ? a.createdAt.getTime() : 0;
+    const tb = b.createdAt ? b.createdAt.getTime() : 0;
+    if (ta !== tb) return ta - tb;
+    return a.fullName.localeCompare(b.fullName, 'vi');
+  });
+
+  const reservedCodes = new Set<string>();
+  const monthKeysCreated = new Set<string>();
+  const payloads = sorted.map((cust) => {
+    const soldAt = resolveCustomerBackfillSoldAt(cust);
+    const orderId = generateFirestoreId('ord');
+    const orderCode = generateSuggestedOrderCode(
+      authoritativeOrders,
+      soldAt,
+      reservedCodes
+    );
+    reservedCodes.add(orderCode);
+    monthKeysCreated.add(soldAt.slice(0, 7));
+
+    const machineCount = Math.min(
+      CRM_LIMITS.MACHINE_COUNT_MAX,
+      Math.max(1, Math.floor(cust.machineCount || 1))
+    );
+
+    return {
+      orderId,
+      customerId: cust.id,
+      data: buildAutoOrderPayload({
+        orderId,
+        workspaceId,
+        ownerId,
+        customerId: cust.id,
+        fullName: cust.fullName,
+        phones: cust.phones,
+        address: cust.address,
+        googleMapsUrl: cust.googleMapsUrl,
+        quickNote: cust.quickNote,
+        soldAt,
+        machineCount,
+        orderCode,
+      }),
+    };
+  });
+
+  const chunkSize = 400;
+  for (let i = 0; i < payloads.length; i += chunkSize) {
+    const slice = payloads.slice(i, i + chunkSize);
+    const batch = writeBatch(db);
+    for (const item of slice) {
+      batch.set(doc(db, 'workspaces', workspaceId, 'orders', item.orderId), item.data);
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.WRITE,
+        `workspaces/${workspaceId}/orders`
+      );
+    }
+  }
+
+  for (const item of payloads) {
+    unmarkCustomerSkippedFromBackfill(workspaceId, item.customerId);
+  }
+
+  return {
+    created: payloads.length,
+    monthCount: monthKeysCreated.size,
   };
 }
 
@@ -379,13 +630,61 @@ export async function createCustomer(
   workspaceId: string,
   ownerId: string,
   input: CustomerInputPayload,
-  customId?: string
+  customId?: string,
+  options?: {
+    existingOrders?: Pick<OrderRecord, 'orderCode'>[];
+    onAutoOrderCreated?: (orderCode: string) => void;
+  }
 ): Promise<string> {
   const id = customId && CRM_LIMITS.ID_PATTERN.test(customId)
     ? customId.slice(0, CRM_LIMITS.ID_MAX)
     : generateFirestoreId('cust');
   const path = `workspaces/${workspaceId}/customers/${id}`;
-  const clean = sanitizeCustomerFields(input);
+  const clean = sanitizeCustomerFields(input, getTodayDateString());
+
+  if (clean.status === 'won' && options?.existingOrders) {
+    const soldAt = clean.soldAt || getTodayDateString();
+    const orderId = generateFirestoreId('ord');
+    const orderCode = generateSuggestedOrderCode(options.existingOrders, soldAt);
+    const batch = writeBatch(db);
+
+    batch.set(doc(db, 'workspaces', workspaceId, 'customers', id), {
+      id,
+      workspaceId,
+      ownerId,
+      assignedTo: ownerId,
+      ...clean,
+      soldAt,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    batch.set(
+      doc(db, 'workspaces', workspaceId, 'orders', orderId),
+      buildAutoOrderPayload({
+        orderId,
+        workspaceId,
+        ownerId,
+        customerId: id,
+        fullName: clean.fullName,
+        phones: clean.phones,
+        address: clean.address,
+        googleMapsUrl: clean.googleMapsUrl,
+        quickNote: clean.quickNote,
+        soldAt,
+        machineCount: clean.machineCount,
+        orderCode,
+      })
+    );
+
+    try {
+      await batch.commit();
+      options.onAutoOrderCreated?.(orderCode);
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  }
 
   try {
     await setDoc(doc(db, 'workspaces', workspaceId, 'customers', id), {
@@ -407,10 +706,67 @@ export async function updateCustomer(
   workspaceId: string,
   customerId: string,
   assignedTo: string,
-  input: CustomerInputPayload
-): Promise<void> {
+  input: CustomerInputPayload,
+  options?: {
+    ownerId?: string;
+    existingCustomer?: CustomerRecord;
+    existingOrders?: OrderRecord[];
+  }
+): Promise<{ autoOrderCode?: string }> {
   const path = `workspaces/${workspaceId}/customers/${customerId}`;
-  const clean = sanitizeCustomerFields(input);
+  const fallbackCreatedDate = options?.existingCustomer
+    ? getCustomerCreatedDate(options.existingCustomer)
+    : getTodayDateString();
+  const clean = sanitizeCustomerFields(input, fallbackCreatedDate);
+
+  const existingOrders = options?.existingOrders ?? [];
+  const hasExistingOrder = existingOrders.some((o) => o.customerId === customerId);
+  const shouldAutoCreateOrder =
+    Boolean(options?.ownerId) &&
+    Boolean(options?.existingCustomer) &&
+    options!.existingCustomer!.status !== 'won' &&
+    clean.status === 'won' &&
+    !hasExistingOrder;
+
+  if (shouldAutoCreateOrder && options?.ownerId) {
+    const soldAt = clean.soldAt || getTodayDateString();
+    const orderId = generateFirestoreId('ord');
+    const orderCode = generateSuggestedOrderCode(existingOrders, soldAt);
+    const batch = writeBatch(db);
+
+    batch.update(doc(db, 'workspaces', workspaceId, 'customers', customerId), {
+      ...clean,
+      soldAt,
+      assignedTo,
+      updatedAt: serverTimestamp(),
+    });
+
+    batch.set(
+      doc(db, 'workspaces', workspaceId, 'orders', orderId),
+      buildAutoOrderPayload({
+        orderId,
+        workspaceId,
+        ownerId: options.ownerId,
+        customerId,
+        fullName: clean.fullName,
+        phones: clean.phones,
+        address: clean.address,
+        googleMapsUrl: clean.googleMapsUrl,
+        quickNote: clean.quickNote,
+        soldAt,
+        machineCount: clean.machineCount,
+        orderCode,
+      })
+    );
+
+    try {
+      await batch.commit();
+      unmarkCustomerSkippedFromBackfill(workspaceId, customerId);
+      return { autoOrderCode: orderCode };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  }
 
   try {
     await updateDoc(doc(db, 'workspaces', workspaceId, 'customers', customerId), {
@@ -418,6 +774,7 @@ export async function updateCustomer(
       assignedTo,
       updatedAt: serverTimestamp(),
     });
+    return {};
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -427,16 +784,73 @@ export async function updateCustomerStatus(
   workspaceId: string,
   customerId: string,
   status: CustomerStatus,
-  existingCustomer?: Pick<CustomerRecord, 'soldAt' | 'machineCount'>
-): Promise<void> {
+  existingCustomer?: CustomerRecord,
+  options?: {
+    ownerId?: string;
+    existingOrders?: OrderRecord[];
+  }
+): Promise<{ autoOrderCode?: string }> {
   const path = `workspaces/${workspaceId}/customers/${customerId}`;
+  const today = getTodayDateString();
+  const existingOrders = options?.existingOrders ?? [];
+  const hasExistingOrder = existingOrders.some((o) => o.customerId === customerId);
+  const shouldAutoCreateOrder =
+    status === 'won' &&
+    Boolean(options?.ownerId) &&
+    Boolean(existingCustomer) &&
+    existingCustomer!.status !== 'won' &&
+    !hasExistingOrder;
+
+  if (shouldAutoCreateOrder && existingCustomer && options?.ownerId) {
+    const orderId = generateFirestoreId('ord');
+    const orderCode = generateSuggestedOrderCode(existingOrders, today);
+    const machines =
+      existingCustomer.machineCount >= 1
+        ? Math.min(CRM_LIMITS.MACHINE_COUNT_MAX, Math.floor(existingCustomer.machineCount))
+        : 1;
+    const batch = writeBatch(db);
+
+    batch.update(doc(db, 'workspaces', workspaceId, 'customers', customerId), {
+      status: 'won',
+      soldAt: today,
+      machineCount: machines,
+      updatedAt: serverTimestamp(),
+    });
+
+    batch.set(
+      doc(db, 'workspaces', workspaceId, 'orders', orderId),
+      buildAutoOrderPayload({
+        orderId,
+        workspaceId,
+        ownerId: options.ownerId,
+        customerId,
+        fullName: existingCustomer.fullName,
+        phones: existingCustomer.phones,
+        address: existingCustomer.address,
+        googleMapsUrl: existingCustomer.googleMapsUrl,
+        quickNote: existingCustomer.quickNote,
+        soldAt: today,
+        machineCount: machines,
+        orderCode,
+      })
+    );
+
+    try {
+      await batch.commit();
+      unmarkCustomerSkippedFromBackfill(workspaceId, customerId);
+      return { autoOrderCode: orderCode };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  }
+
   const updatePayload: Record<string, unknown> = {
     status,
     updatedAt: serverTimestamp(),
   };
 
   if (status === 'won') {
-    updatePayload.soldAt = existingCustomer?.soldAt?.trim() || getTodayDateString();
+    updatePayload.soldAt = existingCustomer?.soldAt?.trim() || today;
     updatePayload.machineCount =
       existingCustomer && existingCustomer.machineCount >= 1
         ? Math.min(CRM_LIMITS.MACHINE_COUNT_MAX, Math.floor(existingCustomer.machineCount))
@@ -445,6 +859,7 @@ export async function updateCustomerStatus(
 
   try {
     await updateDoc(doc(db, 'workspaces', workspaceId, 'customers', customerId), updatePayload);
+    return {};
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -537,26 +952,74 @@ export async function bulkUpdateCustomerStatus(
   workspaceId: string,
   customerIds: string[],
   status: CustomerStatus,
-  existingCustomers?: CustomerRecord[]
-): Promise<void> {
+  existingCustomers?: CustomerRecord[],
+  options?: {
+    ownerId?: string;
+    existingOrders?: OrderRecord[];
+  }
+): Promise<{ autoOrdersCreated: number }> {
   const existingMap = new Map(existingCustomers?.map((c) => [c.id, c]) ?? []);
+  const existingOrders = options?.existingOrders ?? [];
+  const customersWithOrders = new Set(existingOrders.map((o) => o.customerId));
+  const reservedCodes = new Set<string>();
   const today = getTodayDateString();
-  const chunkSize = 400;
+  let autoOrdersCreated = 0;
+
+  const chunkSize = 200;
   for (let i = 0; i < customerIds.length; i += chunkSize) {
     const slice = customerIds.slice(i, i + chunkSize);
     const batch = writeBatch(db);
     for (const id of slice) {
+      const existing = existingMap.get(id);
+      const shouldAutoCreateOrder =
+        status === 'won' &&
+        Boolean(options?.ownerId) &&
+        Boolean(existing) &&
+        existing!.status !== 'won' &&
+        !customersWithOrders.has(id);
+
       const updatePayload: Record<string, unknown> = {
         status,
         updatedAt: serverTimestamp(),
       };
       if (status === 'won') {
-        const existing = existingMap.get(id);
-        updatePayload.soldAt = existing?.soldAt?.trim() || today;
-        updatePayload.machineCount =
+        const machines =
           existing && existing.machineCount >= 1
             ? Math.min(CRM_LIMITS.MACHINE_COUNT_MAX, Math.floor(existing.machineCount))
             : 1;
+        updatePayload.soldAt = shouldAutoCreateOrder
+          ? today
+          : existing?.soldAt?.trim() || today;
+        updatePayload.machineCount = machines;
+
+        if (shouldAutoCreateOrder && existing && options?.ownerId) {
+          const orderId = generateFirestoreId('ord');
+          const orderCode = generateSuggestedOrderCode(
+            existingOrders,
+            today,
+            reservedCodes
+          );
+          reservedCodes.add(orderCode);
+          customersWithOrders.add(id);
+          autoOrdersCreated += 1;
+          batch.set(
+            doc(db, 'workspaces', workspaceId, 'orders', orderId),
+            buildAutoOrderPayload({
+              orderId,
+              workspaceId,
+              ownerId: options.ownerId,
+              customerId: id,
+              fullName: existing.fullName,
+              phones: existing.phones,
+              address: existing.address,
+              googleMapsUrl: existing.googleMapsUrl,
+              quickNote: existing.quickNote,
+              soldAt: today,
+              machineCount: machines,
+              orderCode,
+            })
+          );
+        }
       }
       batch.update(doc(db, 'workspaces', workspaceId, 'customers', id), updatePayload);
     }
@@ -566,6 +1029,12 @@ export async function bulkUpdateCustomerStatus(
       handleFirestoreError(error, OperationType.UPDATE, `workspaces/${workspaceId}/customers`);
     }
   }
+  if (autoOrdersCreated > 0) {
+    for (const id of customerIds) {
+      unmarkCustomerSkippedFromBackfill(workspaceId, id);
+    }
+  }
+  return { autoOrdersCreated };
 }
 
 export async function addCustomerNote(
@@ -719,6 +1188,7 @@ export async function createOrderWithCustomerSync(
 
   try {
     await batch.commit();
+    unmarkCustomerSkippedFromBackfill(workspaceId, customer.id);
     return orderId;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -848,6 +1318,7 @@ export async function buildBackupBundle(
         isStarred: c.isStarred,
         soldAt: c.soldAt,
         machineCount: c.machineCount,
+        createdDate: getCustomerCreatedDate(c),
         createdAtIso: c.createdAt ? c.createdAt.toISOString() : undefined,
         updatedAtIso: c.updatedAt ? c.updatedAt.toISOString() : undefined,
         notes,
@@ -932,7 +1403,8 @@ export async function restoreCustomersFromBackup(
     const batch = writeBatch(db);
 
     for (const op of chunk) {
-      const clean = sanitizeCustomerFields(op.payload);
+      const fallbackDate = op.payload.createdDate || getTodayDateString();
+      const clean = sanitizeCustomerFields(op.payload, fallbackDate);
       const ref = doc(db, 'workspaces', workspaceId, 'customers', op.id);
       if (op.type === 'update') {
         batch.update(ref, {

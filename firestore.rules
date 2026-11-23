@@ -100,7 +100,7 @@ service cloud.firestore {
           'id', 'workspaceId', 'ownerId', 'assignedTo', 'fullName', 'company',
           'position', 'phones', 'email', 'address', 'googleMapsUrl', 'status',
           'priority', 'source', 'tags', 'quickNote', 'nextFollowUpAt',
-          'estimatedValue', 'isStarred', 'soldAt', 'machineCount',
+          'estimatedValue', 'isStarred', 'soldAt', 'machineCount', 'createdDate',
           'createdAt', 'updatedAt'
         ])
         && data.id is string && data.id == customerId && isValidId(data.id)
@@ -124,6 +124,7 @@ service cloud.firestore {
         && data.isStarred is bool
         && (!('soldAt' in data) || (data.soldAt is string && data.soldAt.size() <= 32))
         && (!('machineCount' in data) || ((data.machineCount is int || data.machineCount is float) && data.machineCount >= 0 && data.machineCount <= 1000))
+        && (!('createdDate' in data) || (data.createdDate is string && data.createdDate.size() <= 32))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -268,12 +269,12 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (
-            // Action: Full Profile Edit
+            // Action: Full Profile Edit (including editable createdDate)
             incoming().diff(existing()).affectedKeys().hasOnly([
               'fullName', 'company', 'position', 'phones', 'email', 'address',
               'googleMapsUrl', 'status', 'priority', 'source', 'tags', 'quickNote',
               'nextFollowUpAt', 'estimatedValue', 'isStarred', 'soldAt', 'machineCount',
-              'assignedTo', 'updatedAt'
+              'createdDate', 'assignedTo', 'updatedAt'
             ]) ||
             // Action: Quick Status Change (auto-populates soldAt/machineCount when closing sale)
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'soldAt', 'machineCount', 'updatedAt']) ||
@@ -325,7 +326,7 @@ service cloud.firestore {
           && isVerifiedUser()
           && isValidOrder(incoming(), workspaceId, orderId)
           && isWorkspaceMember(workspaceId)
-          && exists(/databases/$(database)/documents/workspaces/$(workspaceId)/customers/$(incoming().customerId))
+          && existsAfter(/databases/$(database)/documents/workspaces/$(workspaceId)/customers/$(incoming().customerId))
           && incoming().ownerId == request.auth.uid
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time;

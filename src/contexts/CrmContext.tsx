@@ -15,7 +15,14 @@ import {
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
-import { ensureUserWorkspace, mapCustomerDoc, mapOrderDoc } from '../lib/crm-service';
+import {
+  backfillOrdersFromWonCustomers,
+  ensureUserWorkspace,
+  getSkippedBackfillCustomerIds,
+  mapCustomerDoc,
+  mapOrderDoc,
+} from '../lib/crm-service';
+import { compareCustomersByCreatedDate } from '../lib/payroll';
 import type {
   CustomerRecord,
   OrderRecord,
@@ -131,6 +138,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
   const workspaceReadyPromiseRef = useRef<Promise<{ uid: string; workspaceId: string }> | null>(
     null
   );
+  const backfillRanSessionRef = useRef<string | null>(null);
   const authReadyResolverRef = useRef<{
     resolve: (u: User | null) => void;
   } | null>(null);
@@ -160,6 +168,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
         setCustomers([]);
         setOrders([]);
         workspaceReadyPromiseRef.current = null;
+        backfillRanSessionRef.current = null;
         setLoadingAuth(false);
         setLoadingData(false);
         return;
@@ -253,11 +262,48 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
     }
 
     setLoadingData(true);
+    let cancelled = false;
     let customersReady = false;
     let ordersReady = false;
+    let customersFromServer = false;
+    let ordersFromServer = false;
+    let latestCustomers: CustomerRecord[] = [];
+    let latestOrders: OrderRecord[] = [];
+
     const markReadyIfBoth = () => {
       if (customersReady && ordersReady) {
         setLoadingData(false);
+      }
+      const sessionKey = `${activeUserId}:${activeWorkspaceId}`;
+      if (
+        customersFromServer &&
+        ordersFromServer &&
+        backfillRanSessionRef.current !== sessionKey
+      ) {
+        backfillRanSessionRef.current = sessionKey;
+        void (async () => {
+          try {
+            if (workspaceReadyPromiseRef.current) {
+              const ready = await workspaceReadyPromiseRef.current;
+              if (cancelled || ready.workspaceId !== activeWorkspaceId) return;
+            }
+            const skipIds = getSkippedBackfillCustomerIds(activeWorkspaceId);
+            const result = await backfillOrdersFromWonCustomers(
+              activeWorkspaceId,
+              activeUserId,
+              latestCustomers,
+              latestOrders,
+              { skipCustomerIds: skipIds }
+            );
+            if (!cancelled && result.created > 0) {
+              toast.success(
+                `Đã tự động tạo ${result.created} đơn hàng từ khách Đã bán và phân theo ${result.monthCount} tháng`
+              );
+            }
+          } catch (error) {
+            console.error('Auto backfill orders error:', error);
+          }
+        })();
       }
     };
 
@@ -269,15 +315,20 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
 
     const unsubCustomers = onSnapshot(
       customersQuery,
+      { includeMetadataChanges: true },
       (snapshot) => {
-        const list = snapshot.docs.map((d) => mapCustomerDoc(d.id, d.data()));
-        list.sort((a, b) => {
-          const ta = a.updatedAt ? a.updatedAt.getTime() : 0;
-          const tb = b.updatedAt ? b.updatedAt.getTime() : 0;
-          return tb - ta;
-        });
-        setCustomers(list);
+        const shouldUpdateList =
+          !customersReady || snapshot.docChanges().length > 0;
+        if (shouldUpdateList) {
+          const list = snapshot.docs.map((d) => mapCustomerDoc(d.id, d.data()));
+          list.sort((a, b) => compareCustomersByCreatedDate(a, b, 'desc'));
+          latestCustomers = list;
+          setCustomers(list);
+        }
         customersReady = true;
+        if (!snapshot.metadata.fromCache) {
+          customersFromServer = true;
+        }
         markReadyIfBoth();
       },
       (error) => {
@@ -299,16 +350,25 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
 
     const unsubOrders = onSnapshot(
       ordersQuery,
+      { includeMetadataChanges: true },
       (snapshot) => {
-        const list = snapshot.docs.map((d) => mapOrderDoc(d.id, d.data()));
-        list.sort((a, b) => {
-          if (a.soldAt !== b.soldAt) return b.soldAt.localeCompare(a.soldAt);
-          const ta = a.createdAt ? a.createdAt.getTime() : 0;
-          const tb = b.createdAt ? b.createdAt.getTime() : 0;
-          return tb - ta;
-        });
-        setOrders(list);
+        const shouldUpdateList =
+          !ordersReady || snapshot.docChanges().length > 0;
+        if (shouldUpdateList) {
+          const list = snapshot.docs.map((d) => mapOrderDoc(d.id, d.data()));
+          list.sort((a, b) => {
+            if (a.soldAt !== b.soldAt) return b.soldAt.localeCompare(a.soldAt);
+            const ta = a.createdAt ? a.createdAt.getTime() : 0;
+            const tb = b.createdAt ? b.createdAt.getTime() : 0;
+            return tb - ta;
+          });
+          latestOrders = list;
+          setOrders(list);
+        }
         ordersReady = true;
+        if (!snapshot.metadata.fromCache) {
+          ordersFromServer = true;
+        }
         markReadyIfBoth();
       },
       (error) => {
@@ -323,6 +383,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
     );
 
     return () => {
+      cancelled = true;
       unsubCustomers();
       unsubOrders();
     };
