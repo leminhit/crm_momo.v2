@@ -22,7 +22,10 @@ import {
   mapCustomerDoc,
   mapOrderDoc,
 } from '../lib/crm-service';
-import { compareCustomersByCreatedDate } from '../lib/payroll';
+import {
+  compareCustomersByCreatedDate,
+  compareOrdersBySaleDate,
+} from '../lib/payroll';
 import type {
   CustomerRecord,
   OrderRecord,
@@ -321,7 +324,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
           !customersReady || snapshot.docChanges().length > 0;
         if (shouldUpdateList) {
           const list = snapshot.docs.map((d) => mapCustomerDoc(d.id, d.data()));
-          list.sort((a, b) => compareCustomersByCreatedDate(a, b, 'desc'));
+          list.sort((a, b) => compareCustomersByCreatedDate(a, b, 'asc'));
           latestCustomers = list;
           setCustomers(list);
         }
@@ -356,12 +359,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
           !ordersReady || snapshot.docChanges().length > 0;
         if (shouldUpdateList) {
           const list = snapshot.docs.map((d) => mapOrderDoc(d.id, d.data()));
-          list.sort((a, b) => {
-            if (a.soldAt !== b.soldAt) return b.soldAt.localeCompare(a.soldAt);
-            const ta = a.createdAt ? a.createdAt.getTime() : 0;
-            const tb = b.createdAt ? b.createdAt.getTime() : 0;
-            return tb - ta;
-          });
+          list.sort((a, b) => compareOrdersBySaleDate(a, b, 'desc'));
           latestOrders = list;
           setOrders(list);
         }

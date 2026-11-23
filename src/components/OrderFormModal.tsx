@@ -78,7 +78,7 @@ export function OrderFormModal({
     reset,
     watch,
     setValue,
-    formState: { errors, isSubmitting },
+    formState: { errors, isSubmitting, dirtyFields },
   } = form;
 
   const watchedCustomerId = watch('customerId');
@@ -145,6 +145,15 @@ export function OrderFormModal({
     // Intentionally reset only when modal opens or editing target changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editingOrder, reset]);
+
+  useEffect(() => {
+    if (!open || isEditing || !watchedSoldAt || dirtyFields.orderCode) {
+      return;
+    }
+    setValue('orderCode', generateSuggestedOrderCode(orders, watchedSoldAt), {
+      shouldDirty: false,
+    });
+  }, [open, isEditing, watchedSoldAt, dirtyFields.orderCode, orders, setValue]);
 
   useEffect(() => {
     if (!legacySaleInfo) {

@@ -27,6 +27,7 @@ import {
   markCustomerSkippedFromBackfill,
 } from '../lib/crm-service';
 import {
+  compareOrdersBySaleDate,
   formatDateShort,
   formatMonthLabel,
   getOrderMachineCount,
@@ -150,14 +151,7 @@ export function OrdersPage({ onSelectCustomer }: OrdersPageProps) {
       b.monthKey.localeCompare(a.monthKey)
     );
     for (const group of groups) {
-      group.orders.sort((a, b) => {
-        const sa = getOrderSaleDate(a).dateStr;
-        const sb = getOrderSaleDate(b).dateStr;
-        if (sa !== sb) return sb.localeCompare(sa);
-        const ta = a.createdAt ? a.createdAt.getTime() : 0;
-        const tb = b.createdAt ? b.createdAt.getTime() : 0;
-        return tb - ta;
-      });
+      group.orders.sort((a, b) => compareOrdersBySaleDate(a, b, 'desc'));
     }
     return groups;
   }, [filteredOrders]);
@@ -331,10 +325,14 @@ export function OrdersPage({ onSelectCustomer }: OrdersPageProps) {
 
         {/* Summary Row */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-border text-xs text-muted-foreground">
-          <span className="tabular-nums">
-            Hiển thị <strong className="text-foreground">{filteredOrders.length}</strong> /{' '}
-            {orders.length} đơn hàng ({filteredMachinesTotal} loa)
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="tabular-nums">
+              Hiển thị <strong className="text-foreground">{filteredOrders.length}</strong> /{' '}
+              {orders.length} đơn hàng ({filteredMachinesTotal} loa)
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>Thứ tự: Ngày bán mới nhất</span>
+          </div>
           {(searchQuery || selectedMonth !== 'all') && (
             <button
               type="button"

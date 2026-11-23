@@ -114,7 +114,7 @@ export function CustomersPage({
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [starredOnly, setStarredOnly] = useState(false);
   const [selectedWonMonth, setSelectedWonMonth] = useState<string>('all');
-  const [createdSortDir, setCreatedSortDir] = useState<'desc' | 'asc'>('desc');
+  const [createdSortDir, setCreatedSortDir] = useState<'desc' | 'asc'>('asc');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [sorting, setSorting] = useState<SortingState>([]);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
@@ -287,10 +287,14 @@ export function CustomersPage({
 
   const filteredWonGroups = useMemo(() => {
     if (saleTab !== 'won') return [];
-    const groups = groupWonCustomersByMonth(filteredCustomers, orders);
+    const groups = groupWonCustomersByMonth(
+      filteredCustomers,
+      orders,
+      createdSortDir
+    );
     if (selectedWonMonth === 'all') return groups;
     return groups.filter((g) => g.monthKey === selectedWonMonth);
-  }, [saleTab, filteredCustomers, orders, selectedWonMonth]);
+  }, [saleTab, filteredCustomers, orders, selectedWonMonth, createdSortDir]);
 
   const filteredWonOrdersCount = useMemo(
     () => filteredWonGroups.reduce((sum, g) => sum + g.orderCount, 0),
@@ -784,20 +788,22 @@ export function CustomersPage({
               variant="outline"
               size="default"
               onClick={() => {
-                setCreatedSortDir((prev) => (prev === 'desc' ? 'asc' : 'desc'));
+                setCreatedSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
                 setSorting([]);
                 setPagination((prev) => ({ ...prev, pageIndex: 0 }));
               }}
               className="col-span-2 sm:col-span-1 h-11 sm:h-10 gap-1.5 whitespace-nowrap"
               title="Đổi chiều sắp xếp theo ngày tạo khách hàng"
             >
-              {createdSortDir === 'desc' ? (
-                <ArrowDown className="h-3.5 w-3.5 text-primary" />
-              ) : (
+              {createdSortDir === 'asc' ? (
                 <ArrowUp className="h-3.5 w-3.5 text-primary" />
+              ) : (
+                <ArrowDown className="h-3.5 w-3.5 text-primary" />
               )}
               <span>
-                {createdSortDir === 'desc' ? 'Ngày tạo: Mới nhất' : 'Ngày tạo: Cũ nhất'}
+                {createdSortDir === 'asc'
+                  ? 'Ngày tạo: Cũ đến mới'
+                  : 'Ngày tạo: Mới nhất'}
               </span>
             </Button>
 
@@ -1576,9 +1582,14 @@ export function CustomersPage({
                 <span className="tabular-nums">
                   Trang {table.state.pagination.pageIndex + 1} /{' '}
                   {Math.max(1, table.getPageCount())} · Cập nhật gần nhất:{' '}
-                  {filteredCustomers[0]?.updatedAt
-                    ? format(filteredCustomers[0].updatedAt, 'dd/MM/yyyy HH:mm')
-                    : '—'}
+                  {(() => {
+                    const latest = filteredCustomers.reduce<Date | null>(
+                      (acc, c) =>
+                        !c.updatedAt ? acc : !acc || c.updatedAt > acc ? c.updatedAt : acc,
+                      null
+                    );
+                    return latest ? format(latest, 'dd/MM/yyyy HH:mm') : '—';
+                  })()}
                 </span>
                 <div className="flex items-center gap-1.5">
                   <Button

@@ -119,24 +119,51 @@ export function getCustomerCreatedDate(
 export function compareCustomersByCreatedDate(
   a: CustomerRecord,
   b: CustomerRecord,
-  direction: 'desc' | 'asc' = 'desc'
+  direction: 'desc' | 'asc' = 'asc'
 ): number {
   const da = getCustomerCreatedDate(a);
   const db = getCustomerCreatedDate(b);
   if (da !== db) {
     return direction === 'desc' ? db.localeCompare(da) : da.localeCompare(db);
   }
-  const ca = a.createdAt ? a.createdAt.getTime() : 0;
-  const cb = b.createdAt ? b.createdAt.getTime() : 0;
+  const now = Date.now();
+  const ca = a.createdAt ? a.createdAt.getTime() : now;
+  const cb = b.createdAt ? b.createdAt.getTime() : now;
   if (ca !== cb) {
     return direction === 'desc' ? cb - ca : ca - cb;
   }
-  const ua = a.updatedAt ? a.updatedAt.getTime() : 0;
-  const ub = b.updatedAt ? b.updatedAt.getTime() : 0;
+  const ua = a.updatedAt ? a.updatedAt.getTime() : now;
+  const ub = b.updatedAt ? b.updatedAt.getTime() : now;
   if (ua !== ub) {
     return direction === 'desc' ? ub - ua : ua - ub;
   }
   return a.fullName.localeCompare(b.fullName, 'vi');
+}
+
+export function compareOrdersBySaleDate(
+  a: Pick<OrderRecord, 'soldAt' | 'createdAt' | 'updatedAt' | 'orderCode'>,
+  b: Pick<OrderRecord, 'soldAt' | 'createdAt' | 'updatedAt' | 'orderCode'>,
+  direction: 'desc' | 'asc' = 'desc'
+): number {
+  const sa = getOrderSaleDate(a).dateStr;
+  const sb = getOrderSaleDate(b).dateStr;
+  if (sa !== sb) {
+    return direction === 'desc' ? sb.localeCompare(sa) : sa.localeCompare(sb);
+  }
+  const now = Date.now();
+  const ca = a.createdAt ? a.createdAt.getTime() : now;
+  const cb = b.createdAt ? b.createdAt.getTime() : now;
+  if (ca !== cb) {
+    return direction === 'desc' ? cb - ca : ca - cb;
+  }
+  const ua = a.updatedAt ? a.updatedAt.getTime() : now;
+  const ub = b.updatedAt ? b.updatedAt.getTime() : now;
+  if (ua !== ub) {
+    return direction === 'desc' ? ub - ua : ua - ub;
+  }
+  return direction === 'desc'
+    ? b.orderCode.localeCompare(a.orderCode, 'vi')
+    : a.orderCode.localeCompare(b.orderCode, 'vi');
 }
 
 export function generateSuggestedOrderCode(
@@ -319,7 +346,8 @@ export interface MonthlySalesGroup {
 
 export function groupWonCustomersByMonth(
   customers: CustomerRecord[],
-  orders: OrderRecord[] = []
+  orders: OrderRecord[] = [],
+  customerSortDir: 'asc' | 'desc' = 'asc'
 ): MonthlySalesGroup[] {
   const allowedCustomerMap = new Map(customers.map((c) => [c.id, c]));
   const allEntries = getUnifiedSaleEntries(customers, orders);
@@ -375,14 +403,9 @@ export function groupWonCustomersByMonth(
       });
     }
 
-    monthEntries.sort((a, b) => {
-      if (a.latestSaleDate !== b.latestSaleDate) {
-        return b.latestSaleDate.localeCompare(a.latestSaleDate);
-      }
-      const ta = a.customer.updatedAt ? a.customer.updatedAt.getTime() : 0;
-      const tb = b.customer.updatedAt ? b.customer.updatedAt.getTime() : 0;
-      return tb - ta;
-    });
+    monthEntries.sort((a, b) =>
+      compareCustomersByCreatedDate(a.customer, b.customer, customerSortDir)
+    );
 
     groups.push({
       monthKey,
