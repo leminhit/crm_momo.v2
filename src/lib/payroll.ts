@@ -119,7 +119,7 @@ export function getCustomerCreatedDate(
 export function compareCustomersByCreatedDate(
   a: CustomerRecord,
   b: CustomerRecord,
-  direction: 'desc' | 'asc' = 'asc'
+  direction: 'desc' | 'asc' = 'desc'
 ): number {
   const da = getCustomerCreatedDate(a);
   const db = getCustomerCreatedDate(b);
@@ -347,7 +347,7 @@ export interface MonthlySalesGroup {
 export function groupWonCustomersByMonth(
   customers: CustomerRecord[],
   orders: OrderRecord[] = [],
-  customerSortDir: 'asc' | 'desc' = 'asc'
+  customerSortDir: 'asc' | 'desc' = 'desc'
 ): MonthlySalesGroup[] {
   const allowedCustomerMap = new Map(customers.map((c) => [c.id, c]));
   const allEntries = getUnifiedSaleEntries(customers, orders);

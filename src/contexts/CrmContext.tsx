@@ -324,7 +324,7 @@ export function CrmProvider({ children }: { children: React.ReactNode }) {
           !customersReady || snapshot.docChanges().length > 0;
         if (shouldUpdateList) {
           const list = snapshot.docs.map((d) => mapCustomerDoc(d.id, d.data()));
-          list.sort((a, b) => compareCustomersByCreatedDate(a, b, 'asc'));
+          list.sort((a, b) => compareCustomersByCreatedDate(a, b, 'desc'));
           latestCustomers = list;
           setCustomers(list);
         }

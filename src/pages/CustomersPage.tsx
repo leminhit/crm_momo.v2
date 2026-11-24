@@ -114,7 +114,7 @@ export function CustomersPage({
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [starredOnly, setStarredOnly] = useState(false);
   const [selectedWonMonth, setSelectedWonMonth] = useState<string>('all');
-  const [createdSortDir, setCreatedSortDir] = useState<'desc' | 'asc'>('asc');
+  const [createdSortDir, setCreatedSortDir] = useState<'desc' | 'asc'>('desc');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [sorting, setSorting] = useState<SortingState>([]);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
@@ -788,22 +788,22 @@ export function CustomersPage({
               variant="outline"
               size="default"
               onClick={() => {
-                setCreatedSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                setCreatedSortDir((prev) => (prev === 'desc' ? 'asc' : 'desc'));
                 setSorting([]);
                 setPagination((prev) => ({ ...prev, pageIndex: 0 }));
               }}
               className="col-span-2 sm:col-span-1 h-11 sm:h-10 gap-1.5 whitespace-nowrap"
               title="Đổi chiều sắp xếp theo ngày tạo khách hàng"
             >
-              {createdSortDir === 'asc' ? (
-                <ArrowUp className="h-3.5 w-3.5 text-primary" />
-              ) : (
+              {createdSortDir === 'desc' ? (
                 <ArrowDown className="h-3.5 w-3.5 text-primary" />
+              ) : (
+                <ArrowUp className="h-3.5 w-3.5 text-primary" />
               )}
               <span>
-                {createdSortDir === 'asc'
-                  ? 'Ngày tạo: Cũ đến mới'
-                  : 'Ngày tạo: Mới nhất'}
+                {createdSortDir === 'desc'
+                  ? 'Ngày tạo: Mới nhất'
+                  : 'Ngày tạo: Cũ đến mới'}
               </span>
             </Button>
 
@@ -1095,8 +1095,7 @@ export function CustomersPage({
                                 </span>
                                 <span aria-hidden="true">·</span>
                                 <span>
-                                  {formatDateShort(entry.latestSaleDate)}
-                                  {entry.isFallbackDate ? ' (tạm tính)' : ''}
+                                  Tạo {formatDateShort(getCustomerCreatedDate(c))}
                                 </span>
                               </div>
                             </div>
@@ -1217,7 +1216,7 @@ export function CustomersPage({
                             <th className="px-4 py-3 whitespace-nowrap">Khách hàng</th>
                             <th className="px-4 py-3 whitespace-nowrap">Số điện thoại &amp; Zalo</th>
                             <th className="px-4 py-3 whitespace-nowrap text-right">Đơn trong tháng</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Ngày bán gần nhất</th>
+                            <th className="px-4 py-3 whitespace-nowrap">Ngày tạo</th>
                             <th className="px-4 py-3 whitespace-nowrap">Vị trí cửa hàng</th>
                             <th className="px-4 py-3 whitespace-nowrap text-right">Thao tác</th>
                           </tr>
@@ -1329,8 +1328,7 @@ export function CustomersPage({
                                   )}
                                 </td>
                                 <td className="px-4 py-3 align-middle font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap">
-                                  {formatDateShort(entry.latestSaleDate)}
-                                  {entry.isFallbackDate ? ' (tạm)' : ''}
+                                  {formatDateShort(getCustomerCreatedDate(c))}
                                 </td>
                                 <td className="px-4 py-3 align-middle">
                                   {mapsHref ? (
